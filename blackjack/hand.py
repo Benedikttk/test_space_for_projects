@@ -25,25 +25,22 @@ def _normalise(rank: str) -> str:
 def hand_total(ranks: Sequence[str]) -> Tuple[int, bool]:
     """Return (best_total, is_soft) for a sequence of ranks.
 
-    *is_soft* is True when an Ace is being counted as 11 and the total is
-    <= 21 (i.e., the hand is not busted using the soft count).
+    *is_soft* is True when an Ace is being counted as 11 and the total
+    is <= 21 (i.e. the hand is not busted using the soft count).
     """
     total = 0
     aces = 0
     for r in ranks:
-        r = _normalise(r)
-        if r == 'A':
+        r_norm = _normalise(r)          # FIX: don't shadow the loop var
+        if r_norm == 'A':
             aces += 1
             total += 11
         else:
-            total += RANK_VALUE[r]
-    soft = False
+            total += RANK_VALUE[r_norm]
     while total > 21 and aces > 0:
         total -= 10
         aces -= 1
-    # soft = at least one ace still counted as 11
-    if aces > 0 and total <= 21:
-        soft = True
+    soft = (aces > 0 and total <= 21)
     return total, soft
 
 
