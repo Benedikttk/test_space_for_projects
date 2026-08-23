@@ -12,7 +12,9 @@ def test_compute_evs_non_empty_for_valid_hand():
     state = AppState()
     state.set_player_cards(["8", "8"])
     state.set_dealer_upcard("6")
-    assert state.compute_evs()
+    evs = state.compute_evs()
+    assert evs
+    assert "stand" in evs
 
 
 def test_update_rules_updates_selected_flags():
