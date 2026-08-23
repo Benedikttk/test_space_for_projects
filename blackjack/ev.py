@@ -12,15 +12,19 @@ All calculations use exact probability arithmetic over shoe composition
 (no Monte Carlo approximation).  The shoe object is NEVER mutated by
 any function in this module; all branching works on local count copies.
 
-Mathematical correctness notes
--------------------------------
+Mathematical correctness guarantees
+-------------------------------------
 * dealer_distribution removes every visible card (player cards + upcard)
   from the shoe snapshot before computing dealer draw probabilities.
 * _hit_ev passes a depleted counts dict into each recursive branch so
   a drawn card cannot be sampled again at deeper levels.
 * split_ev removes both split-pair cards from the shoe snapshot and
-  further depletes for each second card dealt to a child hand.
-* The double EV also depletes a per-branch counts snapshot.
+  further depletes per second card dealt to each child hand.  The
+  dealer upcard and child cards are removed inside action_evs /
+  dealer_distribution, never pre-removed in split_ev, to avoid
+  double-depletion.
+* The double EV uses a per-branch counts snapshot depleted for each
+  possible drawn card.
 """
 
 from __future__ import annotations
@@ -29,7 +33,7 @@ from typing import Dict, List, Sequence, Tuple
 
 from blackjack.rules import RuleSet
 from blackjack.shoe import Shoe, ALL_RANKS
-from blackjack.hand import hand_total, RANK_VALUE, _normalise, Hand
+from blackjack.hand import hand_total, _normalise, Hand
 from blackjack.actions import get_legal_actions
 
 
@@ -43,7 +47,7 @@ def _deplete(counts: _Counts, rank: str) -> _Counts:
     """Return a new counts dict with *rank* decremented by 1.
 
     Silently clamps to 0 if the rank is already absent (graceful handling
-    of unknown/incorrect input from vision layer).
+    of unknown/incorrect input from the vision layer).
     """
     new = dict(counts)
     new[rank] = max(0, new.get(rank, 0) - 1)
@@ -52,6 +56,17 @@ def _deplete(counts: _Counts, rank: str) -> _Counts:
 
 def _total(counts: _Counts) -> int:
     return sum(counts.values())
+
+
+def _counts_to_shoe(counts: _Counts, decks: int) -> Shoe:
+    """Construct a lightweight Shoe whose counts match *counts*.
+
+    Used inside split_ev to pass child-hand shoe states into action_evs
+    without mutating the live Shoe object.
+    """
+    s = Shoe(decks=decks)
+    s.counts = dict(counts)
+    return s
 
 
 # ---------------------------------------------------------------------------
@@ -82,8 +97,9 @@ def dealer_distribution(
     Returns
     -------
     Dict mapping final dealer total (17-21) or 22 (bust) to probability.
+    Probabilities sum to 1.0 (within floating-point precision).
     """
-    # Start from a snapshot and remove every visible card
+    # Build a depleted snapshot: remove every visible card first
     counts: _Counts = shoe.snapshot()
     for card in player_cards:
         counts = _deplete(counts, _normalise(card))
@@ -105,11 +121,12 @@ def dealer_distribution(
             key = tot if tot <= 21 else 22
             return {key: prob}
 
-        result: Dict[int, float] = {}
+        # Degenerate: shoe exhausted — treat current total as final
         if remaining <= 0:
-            # Degenerate: shoe exhausted mid-recursion; treat as stand
             key = tot if tot <= 21 else 22
             return {key: prob}
+
+        result: Dict[int, float] = {}
         for rank in ALL_RANKS:
             if counts[rank] <= 0:
                 continue
@@ -138,7 +155,11 @@ def _stand_ev(
     is_blackjack: bool = False,
     rules: RuleSet | None = None,
 ) -> float:
-    """EV of standing given player total and dealer final distribution."""
+    """EV of standing given player total and dealer final distribution.
+
+    EV is expressed in units of the original bet (e.g. +1.0 = win one
+    bet, -1.0 = lose one bet, 0.0 = push).
+    """
     if rules is None:
         rules = RuleSet()
     ev = 0.0
@@ -146,25 +167,26 @@ def _stand_ev(
     for dealer_total, prob in dealer_dist.items():
         if dealer_total == 22:                     # dealer bust
             ev += prob * bj_payout
-        elif player_total > 21:                    # player bust (shouldn't reach here)
+        elif player_total > 21:                    # player already bust
             ev -= prob
         elif is_blackjack and dealer_total != 21:
+            # Natural vs non-21 dealer: player wins at BJ payout
             ev += prob * bj_payout
         elif is_blackjack and dealer_total == 21:
-            # Natural vs dealer non-natural 21
+            # Natural vs dealer 21 (non-natural hand)
             if rules.natural_beats_dealer_21:
                 ev += prob * bj_payout
-            # else push → +0
+            # else: push → +0
         elif player_total > dealer_total:
             ev += prob
         elif player_total < dealer_total:
             ev -= prob
-        # else push → +0
+        # else: push → +0
     return ev
 
 
 # ---------------------------------------------------------------------------
-# Hit EV  (FIX: deplete counts per branch)
+# Hit EV  -- per-branch shoe depletion
 # ---------------------------------------------------------------------------
 
 def _hit_ev(
@@ -175,17 +197,17 @@ def _hit_ev(
     depth: int = 0,
     max_depth: int = 10,
 ) -> float:
-    """EV of hitting, with per-branch shoe depletion.
+    """EV of hitting optimally from this point forward.
 
     Parameters
     ----------
     counts:
-        A snapshot of remaining cards *after* all previously visible
-        cards have been removed.  Each branch depletes this further for
-        the card it draws.
+        Remaining-card snapshot *after* all previously visible cards
+        have been removed.  Each branch depletes this snapshot for the
+        card it hypothetically draws, so cards are never double-sampled.
     """
     if depth > max_depth:
-        # Safety valve: approximate by standing at current total
+        # Safety valve: too deep, approximate by standing
         tot, _ = hand_total(player_cards)
         return _stand_ev(tot, dealer_dist, rules=rules)
 
@@ -204,7 +226,7 @@ def _hit_ev(
         if new_tot > 21:
             ev += p * (-1.0)
         else:
-            branch_counts = _deplete(counts, rank)   # FIX: deplete before recursing
+            branch_counts = _deplete(counts, rank)   # deplete before recursing
             ev_stand = _stand_ev(new_tot, dealer_dist, rules=rules)
             ev_hit = _hit_ev(new_cards, dealer_dist, branch_counts, rules,
                              depth + 1, max_depth)
@@ -228,16 +250,21 @@ def action_evs(
 
     The shoe is never mutated.  All probability calculations use locally
     depleted count snapshots.
+
+    EV values are in units of the original (pre-split) bet.
     """
     legal = get_legal_actions(hand, rules, splits_used, is_post_split_ace,
                               dealer_upcard)
+
     # Dealer distribution conditioned on all visible cards
     dist = dealer_distribution(
         dealer_upcard, shoe, rules, player_cards=hand.cards
     )
     tot, _ = hand_total(hand.cards)
 
-    # Base counts with all visible cards (player + upcard) already removed
+    # base_counts: shoe snapshot with all visible cards already removed.
+    # Used by hit and double (not passed to dealer_distribution, which
+    # builds its own depleted snapshot internally).
     base_counts: _Counts = shoe.snapshot()
     for card in hand.cards:
         base_counts = _deplete(base_counts, _normalise(card))
@@ -253,11 +280,9 @@ def action_evs(
 
     # --- HIT ---
     if legal.hit:
-        result["hit"] = _hit_ev(
-            hand.cards, dist, base_counts, rules
-        )
+        result["hit"] = _hit_ev(hand.cards, dist, base_counts, rules)
 
-    # --- DOUBLE (FIX: deplete per drawn card) ---
+    # --- DOUBLE: draw exactly one card, then stand; pay/win 2x ---
     if legal.double:
         ev_dbl = 0.0
         remaining = _total(base_counts)
@@ -269,7 +294,7 @@ def action_evs(
                 new_cards = hand.cards + [rank]
                 new_tot, _ = hand_total(new_cards)
                 if new_tot > 21:
-                    ev_dbl += p * (-2.0)
+                    ev_dbl += p * (-2.0)   # lose doubled bet
                 else:
                     ev_dbl += p * (_stand_ev(new_tot, dist, rules=rules) * 2.0)
         result["double"] = ev_dbl
@@ -280,7 +305,7 @@ def action_evs(
             hand, dealer_upcard, shoe, rules, splits_used
         )
 
-    # --- SURRENDER ---
+    # --- SURRENDER: always -0.5 by definition ---
     if legal.surrender:
         result["surrender"] = -0.5
 
@@ -298,15 +323,17 @@ def split_ev(
 
     Methodology
     -----------
-    After splitting, the shoe has lost both copies of the split card.
-    Each child hand then draws one more card.  We iterate over all
-    possible second cards for each child, depleting the shoe further
-    for each branch, and recurse into action_evs so that further
-    splits, doubles, and hits are also evaluated correctly.
+    After splitting, both copies of the split card leave the shoe.
+    Each child hand then draws one additional card from the remaining
+    shoe.  We iterate over all possible second cards, build a child
+    shoe that has the split pair AND the drawn second card removed, then
+    recurse into action_evs (which handles further splits, doubles, hits
+    and also removes the dealer upcard internally -- never pre-removed
+    here to avoid double-depletion).
 
     Returns the combined EV of both child hands (not averaged), which
     represents total return on the original bet unit when each split
-    hand wagers the same stake.
+    hand wagers an equal stake.
     """
     if not hand.can_split:
         raise ValueError(f"Hand {hand} is not splittable")
@@ -318,32 +345,36 @@ def split_ev(
     new_splits_used = splits_used + 1
     is_psa = is_ace_split
 
-    # FIX: Remove both copies of the split card from the shoe snapshot,
-    # then also remove the dealer upcard and any other known cards.
+    # Remove both copies of the split card from the snapshot.
+    # Do NOT remove the dealer upcard here -- action_evs / dealer_distribution
+    # will remove it when they build their own depleted snapshots, avoiding
+    # double-depletion.
     base_counts: _Counts = shoe.snapshot()
-    # The two split cards leave the shoe
-    base_counts = _deplete(base_counts, split_rank)
-    base_counts = _deplete(base_counts, split_rank)
-    # Dealer upcard also seen
-    base_counts = _deplete(base_counts, _normalise(dealer_upcard))
+    base_counts = _deplete(base_counts, split_rank)   # first copy
+    base_counts = _deplete(base_counts, split_rank)   # second copy
 
     remaining = _total(base_counts)
-    ev_per_hand = 0.0
+    if remaining <= 0:
+        return 0.0
 
+    ev_per_hand = 0.0
     for rank in ALL_RANKS:
         if base_counts[rank] <= 0:
             continue
         p = base_counts[rank] / remaining
-        # This child hand receives split_rank + rank
+
+        # Child hand: split_rank (kept card) + rank (newly drawn card)
         sub_hand = Hand(
             cards=[split_rank, rank],
             splits_used=new_splits_used,
             is_post_split_ace=is_psa,
         )
-        # For evaluating the child hand, build a shoe snapshot that has
-        # had this second card removed too (FIX: was missing before)
+
+        # Child shoe: split pair removed + this second card removed.
+        # Dealer upcard and player cards are removed inside action_evs.
         child_counts = _deplete(base_counts, rank)
         child_shoe = _counts_to_shoe(child_counts, shoe.decks)
+
         sub_evs = action_evs(
             sub_hand, dealer_upcard, child_shoe, rules,
             new_splits_used, is_psa,
@@ -351,16 +382,8 @@ def split_ev(
         best = max(sub_evs.values()) if sub_evs else 0.0
         ev_per_hand += p * best
 
-    # Both hands are played; combined EV = 2 × average child EV
+    # Two hands are played symmetrically; total EV = 2 x single-hand EV
     return 2.0 * ev_per_hand
-
-
-def _counts_to_shoe(counts: _Counts, decks: int) -> Shoe:
-    """Construct a Shoe whose counts match *counts* (used in split recursion)."""
-    from blackjack.shoe import Shoe
-    s = Shoe(decks=decks)
-    s.counts = dict(counts)
-    return s
 
 
 def best_action(ev_dict: Dict[str, float]) -> Tuple[str, float]:
