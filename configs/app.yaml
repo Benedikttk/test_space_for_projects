@@ -1,0 +1,21 @@
+app:
+  timezone: "UTC"
+  save_parquet: true
+
+paths:
+  raw_frames_dir: "data/raw_frames"
+  detected_events_dir: "data/detected_events"
+  corrected_events_dir: "data/corrected_events"
+  observations_csv: "data/observations.csv"
+
+vision:
+  fps: 2
+  monitor_index: 1
+  confidence_threshold: 0.85
+  review_threshold: 0.75
+
+simulation:
+  decks: 8
+  dealer_hits_soft_17: false
+  blackjack_payout: 1.5
+  n_hands_default: 1000

@@ -1,0 +1,5 @@
+seed: 42
+hands: 10000
+decks: 8
+dealer_hits_soft_17: false
+blackjack_payout: 1.5

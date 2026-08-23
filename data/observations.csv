@@ -1,0 +1,7 @@
+shoe_id,hand_id,decision_id,event_index,event_type,actor,card,chosen_action,result_units,cards_dealt_since_shoe_start,ts
+shoe_1,hand_1,dec_1,0,dealer_upcard,dealer,10H,,,
+shoe_1,hand_1,dec_1,1,deal_player,self,8C,,,
+shoe_1,hand_1,dec_1,2,deal_player,self,8D,,,
+shoe_1,hand_1,dec_1,3,player_action,self,,hit,,3,2026-08-23T12:00:00Z
+shoe_1,hand_1,dec_1,4,deal_player,self,3S,,,
+shoe_1,hand_1,dec_1,5,settle,system,,,1.0,5,2026-08-23T12:00:15Z

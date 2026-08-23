@@ -1,0 +1,55 @@
+[project]
+name = "blackjack-model"
+version = "0.1.0"
+description = "Blackjack probability, shoe tracking, vision ingestion, and statistical validation engine"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+  { name = "Benedikttk" }
+]
+dependencies = [
+  "numpy>=2.0.0",
+  "pandas>=2.2.0",
+  "scipy>=1.13.0",
+  "matplotlib>=3.9.0",
+  "statsmodels>=0.14.2",
+  "pydantic>=2.8.0",
+  "pyyaml>=6.0.2",
+  "typer>=0.12.3",
+  "rich>=13.7.1",
+  "opencv-python>=4.10.0.84",
+  "mss>=9.0.1",
+  "pyarrow>=17.0.0"
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3.2",
+  "hypothesis>=6.112.1",
+  "ruff>=0.6.2",
+  "mypy>=1.11.1"
+]
+vision_dl = [
+  "torch>=2.4.0",
+  "ultralytics>=8.3.0"
+]
+perf = [
+  "numba>=0.60.0"
+]
+
+[project.scripts]
+bj = "blackjack.cli:app"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true

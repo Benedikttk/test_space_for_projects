@@ -1,0 +1,12 @@
+table_layout:
+  dealer_region: [700, 120, 500, 220]
+  player_regions:
+    seat_1: [380, 430, 300, 220]
+    seat_2: [700, 460, 300, 220]
+    seat_3: [1020, 430, 300, 220]
+  action_region: [1320, 700, 500, 220]
+
+detection:
+  card_model: "template"
+  allowed_ranks: ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"]
+  allowed_suits: ["S", "H", "D", "C"]
