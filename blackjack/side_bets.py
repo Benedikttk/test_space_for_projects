@@ -47,14 +47,13 @@ def perfect_pairs_ev(
     payout_coloured: float = 10.0,
     payout_perfect: float = 30.0,
 ) -> float:
-    """EV of the Perfect Pairs side bet given the two cards dealt.
+    """EV of Perfect Pairs given the player's two already-dealt cards.
 
-    Since we don't track suits, model:
-    - P(perfect pair) = P(same rank, same suit) using uniform suit assumption
-    - P(coloured pair) = P(same rank, same colour) - P(perfect pair)
-    - P(mixed pair) = P(same rank, different colour)
+    - If the two cards are not a pair, the side bet loses immediately.
+    - If they are a pair, we estimate tier probabilities (perfect/coloured/mixed)
+      from remaining same-rank cards using a uniform suit approximation.
 
-    Returns EV per unit staked. Negative means house edge.
+    Returns net EV per unit staked (N:1 payout convention).
     """
     r1 = _normalise(card1)
     r2 = _normalise(card2)
@@ -71,58 +70,25 @@ def perfect_pairs_ev(
         # Not a pair — always loses
         return -1.0
 
-    # It is a pair. P(pair) = n(r) / total after removing card1
+    # It is a pair. Use remaining same-rank population to estimate suit tiers.
     n_rank_after = max(0, c1_in_shoe - 1)
     total_after = total - 1
     if total_after <= 0 or n_rank_after <= 0:
         return -1.0
 
-    # P(any pair)
-    p_pair = n_rank_after / total_after
+    same_suit_remaining = n_rank_after // 4
+    same_colour_remaining = n_rank_after // 2
 
-    # Suit modelling (uniform assumption over remaining cards of same rank):
-    # In a full shoe, each rank has 4 suits per deck, so suits_per_rank = 4*decks
-    # After seeing card1, there are n_rank_after copies of the same rank left.
-    # We model the suit of card1 as drawn uniformly from the 4 suit types.
-    # Given card1's suit, among the n_rank_after remaining:
-    #   - 1 copy shares the exact same suit per deck → but across decks uniformly
-    # Use proportional model:
-    #   P(perfect | pair) ≈ 1 / (4 * decks)   (one exact suit match per deck)
-    #   P(coloured | pair) ≈ (red or black same) - perfect
-    #   P(mixed | pair) = remaining
+    p_perfect_given_pair = same_suit_remaining / n_rank_after
+    p_same_colour_given_pair = same_colour_remaining / n_rank_after
+    p_coloured_given_pair = max(0.0, p_same_colour_given_pair - p_perfect_given_pair)
+    p_mixed_given_pair = max(0.0, 1.0 - p_perfect_given_pair - p_coloured_given_pair)
 
-    suits_total = _SUITS_PER_RANK * shoe.decks  # total suits of this rank
-    # Remove the first card's suit slot
-    suits_remaining = suits_total - 1
-    if suits_remaining <= 0:
-        p_perfect_given_pair = 0.0
-        p_coloured_given_pair = 0.0
-    else:
-        # Exact same suit: (decks - 1) remaining copies of same suit
-        # (one per deck, minus the one already seen)
-        same_suit_count = shoe.decks - 1
-        # Same colour, different suit: there is 1 other suit of same colour per deck
-        same_colour_diff_suit = shoe.decks * 1  # 1 other suit per deck in same colour
-        p_perfect_given_pair = same_suit_count / suits_remaining
-        p_same_colour_given_pair = (same_suit_count + same_colour_diff_suit) / suits_remaining
-        p_coloured_given_pair = p_same_colour_given_pair - p_perfect_given_pair
-
-    p_perfect = p_pair * p_perfect_given_pair
-    p_coloured = p_pair * p_coloured_given_pair
-    p_mixed = p_pair - p_perfect - p_coloured
-
-    ev = (
-        p_perfect * payout_perfect
-        + p_coloured * payout_coloured
-        + p_mixed * payout_mixed
-        - (1 - p_pair) * 1.0  # lose the stake when no pair
+    return (
+        p_perfect_given_pair * payout_perfect
+        + p_coloured_given_pair * payout_coloured
+        + p_mixed_given_pair * payout_mixed
     )
-    # Subtract the stake for pair wins (payout is in addition to stake return)
-    # Correct: EV = sum(p_outcome * net_return) where net_return on loss = -1
-    # On win at N:1, net return = N (get back stake + N units)
-    # The above formula is already correct since we use payout (net win)
-    # and subtract losing probability
-    return ev
 
 
 def _is_straight(ranks: list) -> bool:
@@ -145,12 +111,17 @@ def twenty_one_plus_three_ev(
     payout_three_of_a_kind: float = 30.0,
     payout_straight_flush: float = 40.0,
 ) -> float:
-    """EV of the 21+3 side bet (player card1, card2 + dealer upcard).
+    """EV of the 21+3 side bet given three already-dealt ranks.
 
-    Models poker hand probabilities using uniform suit distribution
-    over remaining ranks in the shoe.
+    Suits are not tracked, so we use a uniform suit prior:
+    P(all three cards share suit) = 1/16.
 
-    Returns EV per unit staked.
+    Rank configuration drives outcomes:
+    - three of a kind: guaranteed TOK payout
+    - straight: straight flush with 1/16, straight otherwise
+    - otherwise: flush with 1/16, lose otherwise
+
+    Returns net EV per unit staked (N:1 payout convention).
     """
     r1 = _normalise(card1)
     r2 = _normalise(card2)
@@ -164,43 +135,15 @@ def twenty_one_plus_three_ev(
     # Straight: consecutive ranks
     is_straight_hand = _is_straight(ranks)
 
-    # Flush / straight flush: need all same suit (modelled uniformly)
-    # P(all three share the same suit) using uniform suit assumption.
-    # Each card independently has 4 suit options; P(all same suit) = 4/4^3 = 1/16
-    # But we need to condition on the actual cards drawn from the shoe.
-    # Use simplified uniform model: P(flush) ≈ 1/16 per combination
-    # More precisely: given the ranks are fixed, P(all same suit) = 1/(4^2) = 1/16
-    # since suit of first card is fixed, second must match (prob 1/4),
-    # third must match (prob 1/4).
     p_flush_given_ranks = 1.0 / 16.0
 
-    # Compute overall probabilities
     if is_toak:
-        # Three of a kind: ranks match. Suit determines flush.
-        # P(straight flush | TOK) = 0 (can't be straight if all same rank)
-        p_straight_flush = 0.0
-        p_toak = (1.0 - p_flush_given_ranks)  # TOK but not flush
-        p_flush = p_flush_given_ranks  # flush TOK — paid as TOK in most rules
-        # Actually TOK flush is a "suited three of a kind" - pays TOK payout
-        # Per most 21+3 rules, three of a kind beats flush regardless of suit
-        p_toak_total = 1.0
-        ev = p_toak_total * payout_three_of_a_kind - 0.0
-        # Wait — we should compute probability that this hand actually forms given shoe
-        # For simplicity: the ranks are given (card1, card2, dealer_upcard are already dealt)
-        # so probability = 1.0 for the rank configuration
-        return payout_three_of_a_kind  # guaranteed win
-    elif is_straight_hand:
-        p_straight_flush = p_flush_given_ranks
-        p_straight_only = 1.0 - p_flush_given_ranks
-        ev = (p_straight_flush * payout_straight_flush
-              + p_straight_only * payout_straight)
-        return ev
-    else:
-        # Could still be a flush
-        p_flush_only = p_flush_given_ranks
-        p_nothing = 1.0 - p_flush_only
-        ev = p_flush_only * payout_flush - p_nothing * 1.0
-        return ev
+        return payout_three_of_a_kind
+    if is_straight_hand:
+        p_sf = p_flush_given_ranks
+        return p_sf * payout_straight_flush + (1.0 - p_sf) * payout_straight
+    p_flush = p_flush_given_ranks
+    return p_flush * payout_flush + (1.0 - p_flush) * (-1.0)
 
 
 def side_bet_summary(
