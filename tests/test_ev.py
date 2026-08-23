@@ -18,6 +18,29 @@ def test_dealer_distribution_differs_between_s17_and_h17_for_upcard_6():
     assert s17 != h17
 
 
+def test_dealer_peeks_does_not_remove_tens_from_subsequent_draws():
+    shoe = Shoe(decks=1)
+    shoe.counts = {r: 0 for r in shoe.counts}
+    shoe.counts['A'] = 1
+    shoe.counts['2'] = 1
+    shoe.counts['T'] = 2
+
+    dist = dealer_distribution('A', shoe, RuleSet(dealer_peeks=True))
+    assert dist == {22: pytest.approx(1.0)}
+
+
+def test_dealer_peeks_conditioning_sums_to_one():
+    dist = dealer_distribution('A', Shoe(decks=8), RuleSet(dealer_peeks=True), player_cards=['9', '7'])
+    assert sum(dist.values()) == pytest.approx(1.0, abs=1e-10)
+
+
+def test_dealer_no_peek_vs_peek_differ_for_ace_upcard():
+    shoe = Shoe(decks=8)
+    no_peek = dealer_distribution('A', shoe, RuleSet(dealer_peeks=False), player_cards=['T', '6'])
+    peek = dealer_distribution('A', shoe, RuleSet(dealer_peeks=True), player_cards=['T', '6'])
+    assert no_peek != peek
+
+
 def test_stand_ev_known_distribution_scalar():
     dist = {17: 0.2, 18: 0.3, 22: 0.5}
     assert _stand_ev(18, dist) == pytest.approx(0.7)
@@ -77,7 +100,7 @@ def test_insurance_ev_increases_with_more_tens():
 # basic_strategy_ev
 # ---------------------------------------------------------------------------
 
-def test_basic_strategy_ev_matches_action_evs_on_fresh_shoe():
+def test_basic_strategy_ev_cached_returns_same_as_uncached():
     rules = RuleSet(insurance=False)  # disable insurance for cleaner comparison
     hand = Hand(['T', '6'])
     upcard = '7'
@@ -102,3 +125,11 @@ def test_dampened_ev_returns_raw_when_ratio_one():
     result = dampened_ev(raw_ev=0.1, basic_strategy_ev_val=-0.05,
                          observation_ratio=1.0)
     assert result == pytest.approx(0.1)
+
+
+def test_dampened_ev_sqrt_blend_midpoint():
+    raw_ev = 1.0
+    basic_ev = 0.0
+    result = dampened_ev(raw_ev=raw_ev, basic_strategy_ev_val=basic_ev,
+                         observation_ratio=0.575)
+    assert result == pytest.approx(0.5 ** 0.5)

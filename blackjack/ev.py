@@ -32,6 +32,7 @@ Mathematical correctness guarantees
 
 from __future__ import annotations
 
+from functools import lru_cache
 from typing import Dict, List, Sequence, Tuple
 
 from blackjack.rules import RuleSet
@@ -109,17 +110,6 @@ def dealer_distribution(
     norm_upcard = _normalise(upcard)
     counts = _deplete(counts, norm_upcard)
 
-    # Dealer peek conditioning: if the dealer already peeked and did NOT
-    # have blackjack, we know the hole card was not the BJ-completing rank.
-    # Remove those branches from the initial draw and renormalise.
-    if rules.dealer_peeks:
-        if norm_upcard == 'A':
-            # Hole card cannot be T (would have been BJ)
-            counts['T'] = 0
-        elif norm_upcard == 'T':
-            # Hole card cannot be A (would have been BJ)
-            counts['A'] = 0
-
     remaining = _total(counts)
 
     def _recurse(
@@ -156,6 +146,30 @@ def dealer_distribution(
             )
             for k, v in sub.items():
                 result[k] = result.get(k, 0.0) + v
+        return result
+
+    if rules.dealer_peeks and norm_upcard in ('A', 'T'):
+        forbidden = 'T' if norm_upcard == 'A' else 'A'
+        total_prob_weight = 0.0
+        result: Dict[int, float] = {}
+        for hole_rank in ALL_RANKS:
+            if hole_rank == forbidden:
+                continue
+            if counts[hole_rank] <= 0:
+                continue
+            p_hole = counts[hole_rank] / remaining
+            total_prob_weight += p_hole
+            hole_counts = _deplete(counts, hole_rank)
+            sub = _recurse(
+                [norm_upcard, hole_rank],
+                p_hole,
+                hole_counts,
+                remaining - 1,
+            )
+            for k, v in sub.items():
+                result[k] = result.get(k, 0.0) + v
+        if total_prob_weight > 0:
+            return {k: v / total_prob_weight for k, v in result.items()}
         return result
 
     return _recurse([norm_upcard], 1.0, counts, remaining)
@@ -222,6 +236,26 @@ def _hit_ev(
         have been removed.  Each branch depletes this snapshot for the
         card it hypothetically draws, so cards are never double-sampled.
     """
+    dist_key = tuple(sorted(dealer_dist.items()))
+    counts_key = tuple(sorted(counts.items()))
+    return _hit_ev_cached(
+        tuple(player_cards), dist_key, counts_key, rules, depth, max_depth
+    )
+
+
+@lru_cache(maxsize=8192)
+def _hit_ev_cached(
+    player_cards_t: Tuple[str, ...],
+    dist_key: Tuple[Tuple[int, float], ...],
+    counts_key: Tuple[Tuple[str, int], ...],
+    rules: RuleSet,
+    depth: int,
+    max_depth: int,
+) -> float:
+    dealer_dist = dict(dist_key)
+    counts = dict(counts_key)
+    player_cards = list(player_cards_t)
+
     if depth > max_depth:
         # Safety valve: too deep, approximate by standing
         tot, _ = hand_total(player_cards)
@@ -244,8 +278,14 @@ def _hit_ev(
         else:
             branch_counts = _deplete(counts, rank)   # deplete before recursing
             ev_stand = _stand_ev(new_tot, dealer_dist, rules=rules)
-            ev_hit = _hit_ev(new_cards, dealer_dist, branch_counts, rules,
-                             depth + 1, max_depth)
+            ev_hit = _hit_ev_cached(
+                tuple(new_cards),
+                dist_key,
+                tuple(sorted(branch_counts.items())),
+                rules,
+                depth + 1,
+                max_depth,
+            )
             ev += p * max(ev_stand, ev_hit)
     return ev
 
@@ -464,14 +504,27 @@ def dampened_ev(
 
     When observation_ratio < min_ratio, return basic_strategy_ev (full dampening).
     When observation_ratio >= 1.0, return raw_ev (no dampening).
-    In between, linearly interpolate.
+    In between, use a square-root interpolation.
     """
     if observation_ratio < min_ratio:
         return basic_strategy_ev_val
     if observation_ratio >= 1.0:
         return raw_ev
-    t = (observation_ratio - min_ratio) / (1.0 - min_ratio)
+    t = ((observation_ratio - min_ratio) / (1.0 - min_ratio)) ** 0.5
     return basic_strategy_ev_val + t * (raw_ev - basic_strategy_ev_val)
+
+
+@lru_cache(maxsize=2048)
+def _basic_strategy_ev_cached(
+    hand_cards: Tuple[str, ...],
+    dealer_upcard: str,
+    rules: RuleSet,
+    decks: int = 8,
+) -> Tuple[Tuple[str, float], ...]:
+    fresh_shoe = Shoe(decks=decks)
+    hand = Hand(cards=list(hand_cards))
+    evs = action_evs(hand, dealer_upcard, fresh_shoe, rules)
+    return tuple(sorted(evs.items()))
 
 
 def basic_strategy_ev(
@@ -485,6 +538,7 @@ def basic_strategy_ev(
     Creates a new Shoe(decks=decks) and calls action_evs.
     Used as the baseline for penetration dampening.
     """
-    fresh_shoe = Shoe(decks=decks)
-    return action_evs(hand, dealer_upcard, fresh_shoe, rules)
-
+    result = _basic_strategy_ev_cached(
+        tuple(hand.cards), _normalise(dealer_upcard), rules, decks
+    )
+    return dict(result)
