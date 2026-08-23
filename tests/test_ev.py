@@ -1,6 +1,6 @@
 import pytest
 
-from blackjack.ev import _stand_ev, action_evs, best_action, dealer_distribution
+from blackjack.ev import _stand_ev, action_evs, best_action, dealer_distribution, insurance_ev, dampened_ev, basic_strategy_ev
 from blackjack.hand import Hand
 from blackjack.rules import RuleSet
 from blackjack.shoe import Shoe
@@ -48,3 +48,57 @@ def test_blackjack_payout_natural_exceeds_non_natural_21():
 def test_best_action_returns_highest_ev_action():
     action, ev = best_action({"hit": -0.1, "stand": 0.2, "double": 0.1})
     assert (action, ev) == ("stand", 0.2)
+
+
+# ---------------------------------------------------------------------------
+# insurance_ev
+# ---------------------------------------------------------------------------
+
+def test_insurance_ev_negative_on_fresh_shoe():
+    # On a neutral 8-deck shoe P(T) = 4/13 ≈ 0.308, EV ≈ -0.077
+    shoe = Shoe(decks=8)
+    ev = insurance_ev(shoe, 'A')
+    assert ev < 0.0
+    assert ev == pytest.approx(2 * (128 / (415)) - 1, abs=1e-6)
+
+
+def test_insurance_ev_increases_with_more_tens():
+    shoe_normal = Shoe(decks=8)
+    shoe_rich = Shoe(decks=8)
+    # Remove low cards to enrich the shoe with tens
+    for _ in range(20):
+        shoe_rich.remove('2')
+    ev_normal = insurance_ev(shoe_normal, 'A')
+    ev_rich = insurance_ev(shoe_rich, 'A')
+    assert ev_rich > ev_normal
+
+
+# ---------------------------------------------------------------------------
+# basic_strategy_ev
+# ---------------------------------------------------------------------------
+
+def test_basic_strategy_ev_matches_action_evs_on_fresh_shoe():
+    rules = RuleSet(insurance=False)  # disable insurance for cleaner comparison
+    hand = Hand(['T', '6'])
+    upcard = '7'
+    fresh = Shoe(decks=8)
+    bs_evs = basic_strategy_ev(hand, upcard, rules, decks=8)
+    direct_evs = action_evs(hand, upcard, fresh, rules)
+    for action in bs_evs:
+        assert bs_evs[action] == pytest.approx(direct_evs[action], abs=1e-10)
+
+
+# ---------------------------------------------------------------------------
+# dampened_ev
+# ---------------------------------------------------------------------------
+
+def test_dampened_ev_returns_basic_when_ratio_zero():
+    result = dampened_ev(raw_ev=0.1, basic_strategy_ev_val=-0.05,
+                         observation_ratio=0.0)
+    assert result == pytest.approx(-0.05)
+
+
+def test_dampened_ev_returns_raw_when_ratio_one():
+    result = dampened_ev(raw_ev=0.1, basic_strategy_ev_val=-0.05,
+                         observation_ratio=1.0)
+    assert result == pytest.approx(0.1)

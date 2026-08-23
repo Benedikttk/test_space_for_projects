@@ -7,6 +7,9 @@ Provides:
 - split_ev: recursive split EV respecting DAS, RSA, max_splits,
   split-aces-one-card restriction, with correct per-branch shoe depletion.
 - best_action: returns (action_name, ev) for the highest-EV action.
+- insurance_ev: EV of the insurance side bet from exact shoe composition.
+- dampened_ev: penetration-dampened EV interpolation.
+- basic_strategy_ev: action EVs on a fresh full-shoe baseline.
 
 All calculations use exact probability arithmetic over shoe composition
 (no Monte Carlo approximation).  The shoe object is NEVER mutated by
@@ -88,7 +91,7 @@ def dealer_distribution(
     shoe:
         Current shoe composition (not mutated).
     rules:
-        Active rule set (H17 / S17).
+        Active rule set (H17 / S17, dealer_peeks).
     player_cards:
         All cards currently visible in the player's hand(s).  These are
         removed from the shoe snapshot so dealer draw probabilities are
@@ -103,7 +106,20 @@ def dealer_distribution(
     counts: _Counts = shoe.snapshot()
     for card in player_cards:
         counts = _deplete(counts, _normalise(card))
-    counts = _deplete(counts, _normalise(upcard))
+    norm_upcard = _normalise(upcard)
+    counts = _deplete(counts, norm_upcard)
+
+    # Dealer peek conditioning: if the dealer already peeked and did NOT
+    # have blackjack, we know the hole card was not the BJ-completing rank.
+    # Remove those branches from the initial draw and renormalise.
+    if rules.dealer_peeks:
+        if norm_upcard == 'A':
+            # Hole card cannot be T (would have been BJ)
+            counts['T'] = 0
+        elif norm_upcard == 'T':
+            # Hole card cannot be A (would have been BJ)
+            counts['A'] = 0
+
     remaining = _total(counts)
 
     def _recurse(
@@ -142,7 +158,7 @@ def dealer_distribution(
                 result[k] = result.get(k, 0.0) + v
         return result
 
-    return _recurse([_normalise(upcard)], 1.0, counts, remaining)
+    return _recurse([norm_upcard], 1.0, counts, remaining)
 
 
 # ---------------------------------------------------------------------------
@@ -309,6 +325,10 @@ def action_evs(
     if legal.surrender:
         result["surrender"] = -0.5
 
+    # --- INSURANCE: only when upcard is A and rules allow ---
+    if rules.insurance and _normalise(dealer_upcard) == 'A':
+        result["insurance"] = insurance_ev(shoe, dealer_upcard)
+
     return result
 
 
@@ -379,7 +399,9 @@ def split_ev(
             sub_hand, dealer_upcard, child_shoe, rules,
             new_splits_used, is_psa,
         )
-        best = max(sub_evs.values()) if sub_evs else 0.0
+        # Exclude insurance from split sub-hand best-action comparison
+        play_evs = {k: v for k, v in sub_evs.items() if k != 'insurance'}
+        best = max(play_evs.values()) if play_evs else 0.0
         ev_per_hand += p * best
 
     # Two hands are played symmetrically; total EV = 2 x single-hand EV
@@ -387,8 +409,82 @@ def split_ev(
 
 
 def best_action(ev_dict: Dict[str, float]) -> Tuple[str, float]:
-    """Return (action_name, ev) for the highest-EV action."""
-    if not ev_dict:
+    """Return (action_name, ev) for the highest-EV action.
+
+    Insurance is excluded from the main action comparison since it is a
+    separate side-bet decision, not a play action.
+    """
+    play_dict = {k: v for k, v in ev_dict.items() if k != 'insurance'}
+    if not play_dict:
         return ("stand", 0.0)
-    best = max(ev_dict, key=lambda k: ev_dict[k])
-    return best, ev_dict[best]
+    best = max(play_dict, key=lambda k: play_dict[k])
+    return best, play_dict[best]
+
+
+# ---------------------------------------------------------------------------
+# Insurance EV
+# ---------------------------------------------------------------------------
+
+def insurance_ev(shoe: Shoe, dealer_upcard: str) -> float:
+    """EV of the insurance side bet given current shoe composition.
+
+    Insurance pays 2:1 if the dealer hole card is a ten-value (T).
+    The bet costs 0.5 units (half the original bet).
+
+    EV = 2 * P(hole = T | shoe, upcard) - 1
+
+    where P(hole = T) is computed from the shoe AFTER removing the upcard
+    and all other visible cards. Returns EV per 0.5-unit insurance stake,
+    expressed in units of the original bet.
+
+    Insurance is +EV when P(hole = T) > 1/3,
+    which occurs at true count >= +3 approximately.
+    """
+    counts = shoe.snapshot()
+    counts = _deplete(counts, _normalise(dealer_upcard))
+    remaining = _total(counts)
+    if remaining <= 0:
+        return -1.0
+    p_ten = counts.get('T', 0) / remaining
+    return 2.0 * p_ten - 1.0
+
+
+# ---------------------------------------------------------------------------
+# Penetration-dampened EV
+# ---------------------------------------------------------------------------
+
+def dampened_ev(
+    raw_ev: float,
+    basic_strategy_ev_val: float,
+    observation_ratio: float,
+    min_ratio: float = 0.15,
+) -> float:
+    """Dampen EV-based deviations from basic strategy toward basic strategy
+    when shoe observation ratio is low.
+
+    When observation_ratio < min_ratio, return basic_strategy_ev (full dampening).
+    When observation_ratio >= 1.0, return raw_ev (no dampening).
+    In between, linearly interpolate.
+    """
+    if observation_ratio < min_ratio:
+        return basic_strategy_ev_val
+    if observation_ratio >= 1.0:
+        return raw_ev
+    t = (observation_ratio - min_ratio) / (1.0 - min_ratio)
+    return basic_strategy_ev_val + t * (raw_ev - basic_strategy_ev_val)
+
+
+def basic_strategy_ev(
+    hand: Hand,
+    dealer_upcard: str,
+    rules: RuleSet,
+    decks: int = 8,
+) -> dict:
+    """Compute action EVs using a fresh full-shoe (basic strategy baseline).
+
+    Creates a new Shoe(decks=decks) and calls action_evs.
+    Used as the baseline for penetration dampening.
+    """
+    fresh_shoe = Shoe(decks=decks)
+    return action_evs(hand, dealer_upcard, fresh_shoe, rules)
+

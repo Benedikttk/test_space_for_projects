@@ -15,8 +15,10 @@ from typing import Dict, List, Optional, Tuple
 from blackjack.rules import RuleSet
 from blackjack.shoe import Shoe
 from blackjack.hand import Hand
-from blackjack.ev import action_evs, best_action, dealer_distribution
+from blackjack.ev import action_evs, best_action, dealer_distribution, insurance_ev, dampened_ev, basic_strategy_ev as _basic_strategy_ev
 from blackjack.actions import get_legal_actions
+from blackjack.kelly import kelly_summary
+from blackjack.side_bets import side_bet_summary
 
 
 @dataclass
@@ -44,6 +46,11 @@ class AppState:
     dealer_upcard: str = ""
     splits_used: int = 0
     is_post_split_ace: bool = False
+
+    # Bankroll / bet sizing
+    bankroll: float = 1000.0
+    min_bet: float = 5.0
+    max_bet: float = 500.0
 
     # Detection health
     detection_confidence: float = 1.0
@@ -116,6 +123,62 @@ class AppState:
             hand, self.rules, self.splits_used,
             self.is_post_split_ace, self.dealer_upcard,
         ).as_set()
+
+    def get_kelly_recommendation(self) -> dict:
+        """Return Kelly criterion bet sizing recommendation."""
+        _, ev, _ = self.get_recommendation()
+        return kelly_summary(
+            ev=ev,
+            bankroll=self.bankroll,
+            min_bet=self.min_bet,
+            max_bet=self.max_bet,
+        )
+
+    def get_insurance_ev(self) -> Optional[float]:
+        """Return insurance EV when dealer upcard is A and rules allow, else None."""
+        from blackjack.hand import _normalise
+        if not self.dealer_upcard:
+            return None
+        if not self.rules.insurance:
+            return None
+        if _normalise(self.dealer_upcard) != 'A':
+            return None
+        return insurance_ev(self.shoe, self.dealer_upcard)
+
+    def get_side_bets(self) -> Optional[dict]:
+        """Return side_bet_summary when player has exactly 2 cards and dealer upcard is set."""
+        if len(self.player_cards) != 2 or not self.dealer_upcard:
+            return None
+        return side_bet_summary(
+            self.shoe,
+            self.player_cards[0],
+            self.player_cards[1],
+            self.dealer_upcard,
+        )
+
+    def get_dampened_recommendation(self) -> dict:
+        """Return dampened EVs blended toward basic strategy by observation ratio."""
+        evs = self.compute_evs()
+        if not evs:
+            return {}
+        if len(self.player_cards) < 2 or not self.dealer_upcard:
+            return {}
+        hand = Hand(
+            cards=list(self.player_cards),
+            splits_used=self.splits_used,
+            is_post_split_ace=self.is_post_split_ace,
+        )
+        bs_evs = _basic_strategy_ev(hand, self.dealer_upcard, self.rules,
+                                    decks=self.shoe.decks)
+        # Compute observation ratio from shoe
+        starting = self.shoe.decks * 52
+        seen = starting - self.shoe.total_remaining
+        obs_ratio = seen / starting if starting > 0 else 1.0
+        result = {}
+        for action, raw in evs.items():
+            bs_val = bs_evs.get(action, raw)
+            result[action] = dampened_ev(raw, bs_val, obs_ratio)
+        return result
 
     # ------------------------------------------------------------------
     # History

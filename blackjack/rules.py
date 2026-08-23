@@ -58,6 +58,8 @@ class RuleSet:
     blackjack_payout: float = 1.5            # 3:2
     surrender: SurrenderMode = "late"        # late surrender
     natural_beats_dealer_21: bool = True
+    insurance: bool = True                   # insurance/even-money offered
+    dealer_peeks: bool = True                # dealer peeks for BJ on A or T
 
     # ------------------------------------------------------------------
     # Derived helpers (no extra state, all computed from the flags above)
