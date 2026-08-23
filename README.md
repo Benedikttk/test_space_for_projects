@@ -148,7 +148,7 @@ More precisely in code: start with all aces at 11, then while $T > 21$ and
 there are aces counted as 11, subtract 10. The hand is **soft** if at least
 one ace remains at value 11 after reduction and $T \leq 21$:
 
-$$\text{soft}(H) = \mathbb{1}\!\left[a_{\text{remaining}} \geq 1 \;\wedge\; T(H) \leq 21\right]$$
+$$\text{soft}(H) = \mathbf{1}\!\left[a_{\text{remaining}} \geq 1 \;\wedge\; T(H) \leq 21\right]$$
 
 **Examples:**
 
@@ -209,10 +209,10 @@ $$\omega(P, d) = \begin{cases}
 +\lambda & d = 22 \quad \text{(dealer bust)} \\
 +\lambda & P = \text{BJ},\; d \neq 21 \\
 +\lambda & P = \text{BJ},\; d = 21,\; \texttt{natural\_beats\_dealer\_21} = \text{true} \\
-\phantom{+}0 & P = \text{BJ},\; d = 21,\; \texttt{natural\_beats\_dealer\_21} = \text{false} \quad \text{(push)} \\
+0 & P = \text{BJ},\; d = 21,\; \texttt{natural\_beats\_dealer\_21} = \text{false} \quad \text{(push)} \\
 +1 & P > d \quad \text{(player wins)} \\
 -1 & P < d \quad \text{(player loses)} \\
-\phantom{+}0 & P = d \quad \text{(push)}
+0 & P = d \quad \text{(push)}
 \end{cases}$$
 
 Here $\lambda$ is the **payout multiplier**: $\lambda = \texttt{blackjack\_payout}$
@@ -290,7 +290,7 @@ original stake.
 **Ace-split restriction:** when `split_aces_get_one_card = True`, each
 post-split-ace hand is locked to exactly one drawn card (only stand allowed):
 
-$$\mathcal{A}([A, c]) = \{\text{stand}\} \quad \text{when \texttt{is\_post\_split\_ace} = true}$$
+$$\mathcal{A}([A, c]) = \{\text{stand}\} \quad \text{when } \texttt{is\_post\_split\_ace} = \text{true}$$
 
 **Single-responsibility depletion:** the dealer upcard and player cards are
 removed **exclusively** inside `dealer_distribution` and `action_evs`.
@@ -349,7 +349,7 @@ The **running count** $\text{RC}$ is updated on every observed card $r$:
 
 $$\Delta \text{RC}(r) = \begin{cases}
 +1 & r \in \{2, 3, 4, 5, 6\} \quad \text{(low cards help dealer)} \\
-\phantom{+}0 & r \in \{7, 8, 9\} \quad \text{(neutral)} \\
+0  & r \in \{7, 8, 9\} \quad \text{(neutral)} \\
 -1 & r \in \{T, A\} \quad \text{(high cards help player)}
 \end{cases}$$
 
