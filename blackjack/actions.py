@@ -10,6 +10,13 @@ stand      End the player's turn.
 double     Double the bet and draw exactly one more card.
 split       Split a pair into two separate hands.
 surrender  Forfeit half the bet (late or early depending on rules).
+
+Doubled-hand invariant
+----------------------
+Once a hand has been doubled (hand.doubled=True), the player has already
+received the one forced extra card and **must stand**.  No further hits,
+doubles, splits or surrenders are possible.  This is enforced here so that
+the EV engine and any UI layer automatically see the correct action set.
 """
 
 from __future__ import annotations
@@ -58,18 +65,28 @@ def get_legal_actions(
         return LegalActions(hit=False, stand=False, double=False,
                             split=False, surrender=False)
 
-    # Post-split-ace one-card restriction
+    # Post-split-ace one-card restriction: hand has received its forced card
+    # and can only stand.
     if is_post_split_ace and rules.split_aces_get_one_card and n_cards >= 2:
+        return LegalActions(hit=False, stand=True, double=False,
+                            split=False, surrender=False)
+
+    # Doubled-hand lock: the player already drew the one forced card after
+    # doubling and must stand.  No further action is possible.
+    if hand.doubled and n_cards >= 3:
         return LegalActions(hit=False, stand=True, double=False,
                             split=False, surrender=False)
 
     first_decision = (n_cards == 2)
 
+    # Hit is legal whenever none of the above locks apply.
     can_hit = True
+
     can_stand = True
 
     can_double = (
         first_decision
+        and not hand.doubled          # cannot double an already-doubled hand
         and not is_post_split_ace
         and (rules.double_after_split or splits_used == 0)
     )
