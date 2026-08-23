@@ -5,6 +5,9 @@ capture, classifies cards using computer vision, tracks the shoe composition in
 real time, and computes the mathematically optimal action and its exact expected
 value at every decision point.
 
+> **Note:** GitHub renders LaTeX math in Markdown using `$...$` for inline and `$$...$$` for display equations.
+> All formulas below are written in standard LaTeX notation.
+
 ---
 
 ## Table of Contents
@@ -13,16 +16,18 @@ value at every decision point.
 2. [How Data is Captured](#how-data-is-captured)
 3. [Mid-Shoe Join — Joining a Live Game](#mid-shoe-join)
 4. [The Mathematics](#the-mathematics)
-   - [Shoe & Card Probabilities](#shoe--card-probabilities)
-   - [Hand Evaluation](#hand-evaluation)
-   - [Dealer Outcome Distribution](#dealer-outcome-distribution)
-   - [Expected Value of Standing](#expected-value-of-standing)
-   - [Expected Value of Hitting](#expected-value-of-hitting)
-   - [Expected Value of Doubling](#expected-value-of-doubling)
-   - [Expected Value of Splitting (Recursive)](#expected-value-of-splitting-recursive)
-   - [Surrender](#surrender)
-   - [Card Counting — Hi-Lo True Count](#card-counting--hi-lo-true-count)
-5. [Rule Variants](#rule-variants)
+   - [1. Shoe Composition & Card Probabilities](#1-shoe-composition--card-probabilities)
+   - [2. Hand Evaluation — Best Total](#2-hand-evaluation--best-total)
+   - [3. Dealer Outcome Distribution](#3-dealer-outcome-distribution)
+   - [4. Expected Value of Standing](#4-expected-value-of-standing)
+   - [5. Expected Value of Hitting](#5-expected-value-of-hitting)
+   - [6. Expected Value of Doubling](#6-expected-value-of-doubling)
+   - [7. Expected Value of Splitting (Recursive)](#7-expected-value-of-splitting-recursive)
+   - [8. Surrender](#8-surrender)
+   - [9. Optimal Action Selection](#9-optimal-action-selection)
+   - [10. Card Counting — Hi-Lo True Count](#10-card-counting--hi-lo-true-count)
+   - [11. Mid-Shoe Join — Maximum-Entropy Prior](#11-mid-shoe-join--maximum-entropy-prior)
+5. [Rule Variants & EV Impact](#rule-variants--ev-impact)
 6. [Module Overview](#module-overview)
 7. [Project Layout](#project-layout)
 8. [Compliance Note](#compliance-note)
@@ -35,351 +40,385 @@ value at every decision point.
 python -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -e .[dev]            # core + pytest + ruff + mypy
-# optional GPU/YOLO detector:
-pip install -e .[vision_dl]
+pip install -e .[vision_dl]      # optional: YOLO detector
 pytest
-```
-
-Run the Streamlit UI (manual card entry, no camera required):
-
-```bash
-streamlit run app.py
-```
-
-Start a live screen-capture session:
-
-```bash
-python -m blackjack.capture      # uses configs/app.yaml + vision.yaml
+streamlit run app.py             # launch the UI
 ```
 
 ---
 
 ## How Data is Captured
 
-The system has two input modes that can be mixed freely:
+The system has two input modes that can be mixed freely.
 
 ### Mode 1 — Screen-capture + ML detection (automated)
 
 ```
-Monitor pixels  (mss, 2 FPS default)
+Monitor pixels  (mss, 2 FPS)
       │
-      ▼  crop configured screen regions
- ┌─────────────────────────────────────────────────────┐
- │  dealer_region   player_region   seat_1 … seat_N    │  ← vision.yaml
- └─────────────────────────────────────────────────────┘
+      ▼  crop configured regions from vision.yaml
+ ┌──────────────────────────────────────────────┐
+ │  dealer_region   player_region   seat_1…N    │
+ └──────────────────────────────────────────────┘
       │
-      ▼  CardDetector (TemplateDetector or YOLODetector)
+      ▼  CardDetector
  DetectionResult(rank, suit, confidence)
       │
-      ├── confidence ≥ 0.85  →  auto-accepted, removed from shoe
-      ├── 0.75–0.84           →  flagged for manual review in UI
-      └── < 0.75              →  rejected, not used
-      │
-      ▼  ShoeState.ingest()
- Shoe.remove(rank)   →   rank counts updated   →   running_count updated
+      ├── confidence ≥ 0.85  →  accepted  →  Shoe.remove(rank)
+      ├── 0.75 – 0.84        →  review queue in UI
+      └── < 0.75             →  rejected
       │
       ▼
- action_evs(hand, upcard, shoe, rules)   →   recommendation + EV table
+ action_evs(hand, upcard, shoe, rules)  →  recommendation + EV table
 ```
 
 **TemplateDetector** (zero GPU, default): loads `<rank>_<suit>.png` reference
-images from `data/templates/`, runs multi-scale OpenCV `matchTemplate` at each
-configured screen region, and returns the best-matching card with its
-normalised correlation score as the confidence.
+images from `data/templates/`, runs multi-scale OpenCV `matchTemplate`, returns
+best match with normalised correlation score as confidence.
 
-**YOLODetector** (GPU optional): loads a `.pt` YOLO model from
-`data/models/cards.pt`, runs inference on each cropped region, and maps the
-predicted class label (format `RANK_SUIT`, e.g. `A_S`, `T_H`) to a
-DetectionResult.  Install with `pip install -e .[vision_dl]`.
+**YOLODetector** (GPU optional): loads `.pt` YOLO weights, maps predicted class
+label (`A_S`, `T_H`, …) to `DetectionResult`. Install: `pip install -e .[vision_dl]`.
 
-Cards from **every seat** (other players + dealer) are removed from the shoe
-because they reduce the remaining composition — this is the information that
-drives count-adjusted EV calculations.  Only **your own cards and the dealer
-upcard** are used for the EV computation itself.
+Cards from **all seats** (other players + dealer) are removed from the shoe —
+they reduce the remaining composition and are the information that drives
+count-adjusted EV. Only **your cards and the dealer upcard** enter the EV formula.
 
-### Mode 2 — Manual card entry (always available)
+### Mode 2 — Manual entry
 
-Type each card rank/suit into the UI.  The system calls
-`ShoeState.ingest_manual(rank)` which removes the card from the shoe with
-`confidence=1.0`.  Useful when the camera angle is poor or for verifying
-decisions at a physical table.
+Type each rank into the UI. Calls `ShoeState.ingest_manual(rank)` at confidence 1.0.
 
 ---
 
 ## Mid-Shoe Join
 
-When you sit down at a table already in progress, cards have been dealt that
-you never saw.  The system handles this explicitly:
+When you sit down at a table already in progress, call:
 
 ```python
 shoe_state = ShoeState(decks=8, mid_shoe_join=True)
-# or at runtime:
-session.shoe_state.join_mid_shoe()
+# or at runtime: shoe_state.join_mid_shoe()
 ```
 
-**What this means mathematically:**
-
-- The shoe is initialised at full capacity (8 × 52 = 416 cards).
-- Every card you observe is removed normally.
-- Cards dealt *before you arrived* are **not** removed — they remain in the
-  model as if still in the shoe.  This is the **maximum-entropy prior**: in the
-  absence of information about which ranks were dealt early, assuming a uniform
-  residual distribution is the least-biased estimate.
-- The `observation_ratio` property tracks `cards_seen / starting_cards`.
-  At 0 % you are flying blind; at 100 % you have full information.
-
-**Practical consequence for EV:**
-
-The EV calculation is always *exact for the information you actually have*.
-What changes is how much that information deviates from a fresh shoe:
-
-| observation_ratio | EV quality |
-|---|---|
-| < 10 % | Near-basic-strategy; count adjustments are unreliable |
-| 10–25 % | Mild count signal; treat recommendations with caution |
-| 25–60 % | Count-adjusted EVs are meaningful |
-| > 60 % | High-confidence shoe-aware EVs |
-
-The UI always displays the `uncertainty_label` so you know which regime you
-are in.
+The shoe starts at full capacity. Cards are only removed as they are directly
+observed. See [Section 11](#11-mid-shoe-join--maximum-entropy-prior) for the
+mathematics.
 
 ---
 
 ## The Mathematics
 
-### Shoe & Card Probabilities
-
-A shoe of **N decks** contains N × 52 cards.  Face cards (J, Q, K) are grouped
-with Tens because they all have value 10, giving 10 canonical ranks:
-
-| Rank | Count per deck | Value |
-|------|---------------|-------|
-| 2–9  | 4 each        | face  |
-| T (T/J/Q/K) | 16      | 10    |
-| A    | 4             | 1 or 11 |
-
-After observing a set of cards **C** from the shoe, the probability that the
-next card drawn is rank **r** is:
-
-```
-P(next = r | C) = count(r, remaining) / total_remaining
-```
-
-This is **sampling without replacement** — the canonical model for a finite
-shoe.  It is strictly more accurate than the infinite-deck approximation
-(sampling with replacement) because it correctly captures how probabilities
-shift as the shoe depletes.
+All expected values are in units of the **original bet**:
+$+1$ = win one bet, $-1$ = lose one bet, $0$ = push.
 
 ---
 
-### Hand Evaluation
+### 1. Shoe Composition & Card Probabilities
 
-A hand's **best total** is computed by the greedy ace-reduction algorithm:
+A shoe of $N$ decks contains $52N$ cards. Face cards J, Q, K are grouped with
+T (all worth 10), giving 10 canonical ranks:
 
-1. Sum all cards, counting each Ace as 11.
-2. While `total > 21` and there are aces counted as 11, subtract 10
-   (re-count one Ace as 1).
-3. The hand is **soft** if at least one Ace remains counted as 11 and
-   `total ≤ 21`.
+| Rank | Count per deck | Hard value |
+|------|---------------|------------|
+| 2 – 9 | 4 each | face value |
+| T (T/J/Q/K) | 16 | 10 |
+| A | 4 | 1 or 11 |
 
-Examples:
-- `[A, 6]` → 17, soft (Ace = 11)
-- `[A, 6, 9]` → 16, hard (Ace reduced to 1)
-- `[A, A]` → 12, soft (one Ace = 11, one = 1)
-- `[A, A, 9]` → 21, soft (one Ace = 11, one = 1, 9)
+Let $n_r$ denote the count of rank $r$ remaining in the shoe, and $M = \sum_r n_r$
+the total cards remaining. The probability that the next card drawn is rank $r$ is:
 
-A **natural blackjack** is exactly 2 cards totalling 21.
+$$P(\text{next} = r \mid \mathcal{S}) = \frac{n_r}{M}$$
 
----
+This is **sampling without replacement** — the exact model for a finite shoe.
+It is strictly more accurate than the infinite-deck approximation (uniform
+sampling with replacement) because it correctly captures how probabilities
+shift as cards are removed.
 
-### Dealer Outcome Distribution
-
-The dealer follows a fixed rule: **hit until total ≥ 17** (or ≥ 18 under H17
-when the hand is soft-17).  Given a visible upcard **u** and current shoe
-counts **S**, the function `dealer_distribution(u, S, rules)` computes the
-exact probability of each dealer final total by **recursive probability
-weighting**:
-
-```
-P(dealer_final = d | u, S) = Σ over all draw sequences
-     P(draw sequence) × 1[sequence leads to final total d]
-```
-
-Concretely, at each step where the dealer must hit, we branch over all
-remaining ranks weighted by their shoe probability, deplete the count for that
-branch, and recurse.  The shoe is **never mutated**; each branch operates on
-its own local count copy.
-
-All visible cards — the player's cards **and** the dealer upcard — are removed
-from the snapshot before the recursion begins.  This correctly conditions the
-dealer probabilities on everything that has already been observed.
-
-Bust is encoded as total = 22 for uniform comparison arithmetic.
+**Code:** `Shoe.prob(rank)` → `shoe.counts[rank] / shoe.total_remaining`
 
 ---
 
-### Expected Value of Standing
+### 2. Hand Evaluation — Best Total
 
-EV is measured in units of the **original bet** (+1 = win one bet, −1 = lose
-one bet, 0 = push).
+A hand $H = (c_1, c_2, \ldots, c_k)$ has a **best total** computed by the
+greedy ace-reduction algorithm. Let $a$ be the number of aces and $s$ the sum
+treating each ace as 11:
 
-```
-EV(stand | player_total P, dealer_dist D) =
-    Σ_d  P(dealer = d) × outcome(P, d)
+$$T(H) = s - 10 \cdot \max\!\left(0,\; \left\lceil \frac{s - 21}{10} \right\rceil\right) \text{ (clamped to reduce } a \text{ aces)}$$
 
-where outcome(P, d) =
-    +payout   if d = 22 (dealer bust)
-    +payout   if P = blackjack and d ≠ 21
-    +payout   if P = blackjack and d = 21 and natural_beats_dealer_21
-     0        if P = blackjack and d = 21 and not natural_beats_dealer_21  (push)
-    +1        if P > d  (player wins)
-    -1        if P < d  (dealer wins)
-     0        if P = d  (push)
-```
+More precisely in code: start with all aces at 11, then while $T > 21$ and
+there are aces counted as 11, subtract 10. The hand is **soft** if at least
+one ace remains at value 11 after reduction and $T \leq 21$:
 
-`payout` = 1.0 for non-blackjack wins, `blackjack_payout` (e.g. 1.5 for 3:2)
-for naturals.
+$$\text{soft}(H) = \mathbb{1}\!\left[a_{\text{remaining}} \geq 1 \;\wedge\; T(H) \leq 21\right]$$
 
----
+**Examples:**
 
-### Expected Value of Hitting
+| Hand | Total | Soft? |
+|------|-------|-------|
+| $[\text{A}, 6]$ | 17 | ✓ (A=11) |
+| $[\text{A}, 6, 9]$ | 16 | ✗ (A reduced to 1) |
+| $[\text{A}, \text{A}]$ | 12 | ✓ (one A=11, one A=1) |
+| $[\text{A}, \text{A}, 9]$ | 21 | ✓ |
 
-Hitting is a **decision under uncertainty with future choices**.  The player
-draws a card and then plays optimally from the new state.  This is solved by
-**backward induction** (dynamic programming over the probability tree):
+A **natural blackjack** satisfies $|H| = 2$ and $T(H) = 21$.
 
-```
-EV(hit | cards H, shoe S) =
-    Σ_r  P(next = r | S)
-       × [ bust(H+r) ? −1
-                      : max( EV(stand | H+r), EV(hit | H+r, S−r) ) ]
-```
-
-Key properties:
-- The shoe is depleted by rank **r** before recursing (`S−r`), so each branch
-  conditions on all cards drawn so far.
-- `max(stand, hit)` at each depth means the player always chooses the
-  better option after the next card.
-- Recursion terminates when the player busts or reaches a depth limit (safety
-  valve at depth 10, effectively unreachable for non-degenerate shoes).
+**Code:** `hand_total(cards)` → `(total: int, is_soft: bool)`
 
 ---
 
-### Expected Value of Doubling
+### 3. Dealer Outcome Distribution
 
-Double down: place an additional equal bet, draw **exactly one more card**,
-then stand.  All wins/losses are at 2× the original stake:
+The dealer follows a deterministic rule: hit while $T < 17$, or additionally
+while $T = 17$ and $\text{soft}(H) = \text{true}$ under H17 rules. The dealer's
+final total distribution is computed by **recursive probability weighting** over
+all draw sequences.
 
-```
-EV(double | cards H, shoe S) =
-    Σ_r  P(next = r | S)
-       × [ bust(H+r) ? −2.0
-                      : 2.0 × EV(stand | H+r) ]
-```
+Let $\mathcal{S}^{-} = \mathcal{S} \setminus \{u\} \setminus H_{\text{player}}$
+denote the shoe snapshot after removing the dealer upcard $u$ and all visible
+player cards $H_{\text{player}}$. Then:
 
-The factor of 2 appears because both the original bet and the double bet are at
-risk.  The shoe is depleted per branch for the drawn card.
+$$P(D = d \mid u, \mathcal{S}) = \sum_{\sigma \in \Sigma(u,d)} \prod_{i=1}^{|\sigma|} \frac{n_{\sigma_i}(\mathcal{S}^{-} \setminus \sigma_{1:i-1})}{M(\mathcal{S}^{-} \setminus \sigma_{1:i-1})}$$
+
+where $\Sigma(u, d)$ is the set of all card sequences starting from upcard $u$
+that cause the dealer to stop at final total $d$.
+
+In practice this is computed by the recursive function:
+
+$$\text{DealerDist}(H_D, p, \mathcal{C}) = \begin{cases}
+\{T(H_D) \mapsto p\} & \text{if dealer must stand} \\
+\displaystyle\sum_{r:\, n_r > 0} \text{DealerDist}\!\left(H_D \cup \{r\},\; p \cdot \frac{n_r}{M},\; \mathcal{C} \setminus \{r\}\right) & \text{otherwise}
+\end{cases}$$
+
+Bust is encoded as $d = 22$. The shoe $\mathcal{C}$ is a **local copy** at each
+branch — the live shoe is never mutated.
+
+$$\sum_{d \in \{17,18,19,20,21,22\}} P(D = d) = 1$$
+
+**Code:** `dealer_distribution(upcard, shoe, rules, player_cards)`
 
 ---
 
-### Expected Value of Splitting (Recursive)
+### 4. Expected Value of Standing
 
-Splitting is the most complex action because it creates new hands that can
-themselves be split again (up to `max_splits` times).
+Given player total $P$ and dealer final distribution $\{P(D=d)\}$:
 
-**Setup:**
-After splitting a pair of rank **r**, both copies of **r** leave the shoe.
-Each child hand starts with one **r** and draws one additional card.
+$$\text{EV}_{\text{stand}}(P, D) = \sum_{d} P(D = d) \cdot \omega(P, d)$$
 
-```
-EV(split | pair r, shoe S, rules) =
-    2 × Σ_c  P(next = c | S − 2r)
-           × max_action EV(child hand [r, c], S − 2r − c, rules)
-```
+where the outcome function $\omega$ is:
 
-Where `S − 2r` means the shoe with both split cards removed, and `S − 2r − c`
-means the shoe with both split cards **and** the drawn second card **c** removed
-before evaluating the child hand.  The factor of 2 reflects that both hands
-are played for the same stake.
+$$\omega(P, d) = \begin{cases}
++\lambda & d = 22 \quad \text{(dealer bust)} \\
++\lambda & P = \text{BJ},\; d \neq 21 \\
++\lambda & P = \text{BJ},\; d = 21,\; \texttt{natural\_beats\_dealer\_21} = \text{true} \\
+\phantom{+}0 & P = \text{BJ},\; d = 21,\; \texttt{natural\_beats\_dealer\_21} = \text{false} \quad \text{(push)} \\
++1 & P > d \quad \text{(player wins)} \\
+-1 & P < d \quad \text{(player loses)} \\
+\phantom{+}0 & P = d \quad \text{(push)}
+\end{cases}$$
 
-The `max_action EV` recurses into `action_evs` for each child hand, which
-can itself include further splits (if `resplit_aces` is on and `splits_used <
-max_splits`), doubles (if `double_after_split` is on), hits and stands.
+Here $\lambda$ is the **payout multiplier**: $\lambda = \texttt{blackjack\_payout}$
+(e.g. $1.5$ for 3:2) for naturals, and $\lambda = 1$ for all other wins.
+
+**Code:** `_stand_ev(player_total, dealer_dist, is_blackjack, rules)`
+
+---
+
+### 5. Expected Value of Hitting
+
+Hitting is a **decision under uncertainty with future choices** — a stochastic
+dynamic programme. At each step the player draws a card and then plays optimally.
+This is solved by **backward induction**:
+
+$$\text{EV}_{\text{hit}}(H, \mathcal{C}) = \sum_{r:\, n_r > 0} \frac{n_r}{M(\mathcal{C})} \cdot \begin{cases}
+-1 & T(H \cup \{r\}) > 21 \quad \text{(bust)} \\[4pt]
+\max\!\Bigl(\text{EV}_{\text{stand}}\bigl(T(H \cup \{r\})\bigr),\; \text{EV}_{\text{hit}}\bigl(H \cup \{r\},\; \mathcal{C} \setminus \{r\}\bigr)\Bigr) & \text{otherwise}
+\end{cases}$$
+
+Key correctness properties:
+
+- **Per-branch shoe depletion**: the shoe $\mathcal{C} \setminus \{r\}$ passed into
+  the recursive call has rank $r$ removed, so a drawn card can never be
+  sampled again at deeper levels.
+- **Optimal continuation**: the $\max(\text{stand}, \text{hit})$ at each node
+  means the player always chooses the better option — this is exactly backward
+  induction over the probability tree.
+- **Termination**: recursion stops when the player busts ($T > 21$) or a depth
+  limit is reached (safety valve at depth 10, unreachable for real shoes).
+
+**Code:** `_hit_ev(player_cards, dealer_dist, counts, rules)`
+
+---
+
+### 6. Expected Value of Doubling
+
+Double down: place an additional equal bet, draw **exactly one card**, then
+stand. The total stake is $2 \times$ the original bet:
+
+$$\text{EV}_{\text{double}}(H, \mathcal{C}) = \sum_{r:\, n_r > 0} \frac{n_r}{M(\mathcal{C})} \cdot \begin{cases}
+-2 & T(H \cup \{r\}) > 21 \quad \text{(bust)} \\[4pt]
+2 \cdot \text{EV}_{\text{stand}}\bigl(T(H \cup \{r\})\bigr) & \text{otherwise}
+\end{cases}$$
+
+The factor of 2 reflects that both the original and the doubled bet are at risk.
+No further hits are allowed after the double card — this is enforced by
+`get_legal_actions` which sets `can_hit = False` when `hand.doubled = True`.
+
+**Code:** inside `action_evs`, double branch
+
+---
+
+### 7. Expected Value of Splitting (Recursive)
+
+Splitting is the most complex action because each child hand can itself be
+split again (up to `max_splits` times), doubled, or hit optimally.
+
+**Setup:** after splitting a pair of rank $r$, both copies of $r$ leave the shoe:
+
+$$\mathcal{C}^{(r)} = \mathcal{C} \setminus \{r\} \setminus \{r\}$$
+
+Each child hand then draws one second card $c$ from $\mathcal{C}^{(r)}$,
+producing hand $[r, c]$ with a further-depleted shoe $\mathcal{C}^{(r)} \setminus \{c\}$.
+
+$$\text{EV}_{\text{split}}(r, \mathcal{C}) = 2 \sum_{c:\, n_c^{(r)} > 0} \frac{n_c^{(r)}}{M(\mathcal{C}^{(r)})} \cdot \max_{a \in \mathcal{A}([r,c])} \text{EV}_a\!\left([r, c],\; \mathcal{C}^{(r)} \setminus \{c\}\right)$$
+
+where $\mathcal{A}([r, c])$ is the set of legal actions for the child hand
+(determined by `get_legal_actions`), and the $\max$ recurses into
+`action_evs` — which can include further splits, doubles, hits, and stands.
+
+The factor of **2** reflects that both child hands are played for the same
+original stake.
 
 **Ace-split restriction:** when `split_aces_get_one_card = True`, each
-post-split-ace hand receives exactly one additional card and may not hit,
-double, or re-split.  This is implemented in the action gater
-(`get_legal_actions`) which locks the hand after 2 cards when
-`is_post_split_ace = True`.
+post-split-ace hand is locked to exactly one drawn card (only stand allowed):
 
-**Single responsibility for shoe depletion:** the dealer upcard and player
-cards are removed from the shoe snapshot exclusively inside
-`dealer_distribution` and `action_evs`.  `split_ev` only removes the two
-split-pair cards.  This prevents double-depletion across the recursion boundary.
+$$\mathcal{A}([A, c]) = \{\text{stand}\} \quad \text{when \texttt{is\_post\_split\_ace} = true}$$
 
----
+**Single-responsibility depletion:** the dealer upcard and player cards are
+removed **exclusively** inside `dealer_distribution` and `action_evs`.
+`split_ev` only removes the two split-pair cards. This prevents double-depletion
+across the recursion boundary — a subtle correctness invariant.
 
-### Surrender
-
-Late surrender: the player forfeits **half the bet** before playing.
-
-```
-EV(surrender) = −0.5   (always, by definition)
-```
-
-Surrender is optimal whenever `max(stand, hit, double, split) < −0.5`.
-The most common case is hard 16 vs. dealer 10 under standard rules.
-
-Early surrender (rare): permitted before the dealer checks for blackjack,
-which gives it a slightly higher EV in some spots.  In this engine both
-modes return −0.5; the difference is captured only in *when* the option
-is offered (early surrender can be taken even if the dealer has blackjack,
-which `action_evs` gates via the `surrender` mode flag).
+**Code:** `split_ev(hand, dealer_upcard, shoe, rules, splits_used)`
 
 ---
 
-### Card Counting — Hi-Lo True Count
+### 8. Surrender
 
-The **running count** is updated every time a card is observed:
+Late surrender: the player forfeits half the bet before playing. The EV is
+constant regardless of hand or dealer upcard:
 
-```
-+1  for ranks 2, 3, 4, 5, 6   (low cards favour the dealer)
- 0  for ranks 7, 8, 9          (neutral)
-−1  for ranks T, A             (high cards favour the player)
-```
+$$\text{EV}_{\text{surrender}} = -\tfrac{1}{2}$$
 
-The **true count** normalises for the number of decks remaining:
+Surrender is optimal when:
 
-```
-true_count = running_count / decks_remaining
-           = running_count / (cards_remaining / 52)
-```
+$$-\tfrac{1}{2} > \max\!\left(\text{EV}_{\text{stand}},\; \text{EV}_{\text{hit}},\; \text{EV}_{\text{double}},\; \text{EV}_{\text{split}}\right)$$
 
-A true count of +1 corresponds to roughly **+0.5% player EV** relative to
-the neutral shoe.  The EV engine does not use the true count directly —
-it uses the **exact shoe composition** which subsumes all count information
-and is strictly more precise.  The true count is displayed in the UI as a
-human-readable summary.
+The most common case where this holds is hard 16 vs. dealer T under standard rules,
+where $\text{EV}_{\text{stand}} \approx -0.54$ and $\text{EV}_{\text{hit}} \approx -0.51$.
+
+**Early surrender** (very rare): can be taken before the dealer checks for blackjack.
+In this engine both modes return $-0.5$; the difference is encoded in *when*
+the action is gated (early surrender is available even when the dealer upcard
+is A or T).
+
+**Code:** `result["surrender"] = -0.5` inside `action_evs`
 
 ---
 
-## Rule Variants
+### 9. Optimal Action Selection
 
-All rule variants are encoded in the `RuleSet` dataclass and affect every
-calculation automatically:
+Given the full EV dictionary for all legal actions at a decision point:
 
-| Flag | Effect on EV |
-|------|-------------|
-| `dealer_hits_soft17` (H17) | +0.22% house edge vs S17 |
-| `double_after_split` (DAS) | +0.14% player |
-| `resplit_aces` (RSA) | +0.08% player |
-| `max_splits` 1→4 | +0.05% player per additional split allowed |
-| `blackjack_payout` 3:2→6:5 | −1.37% player (large) |
-| `surrender = late` | +0.07% player |
-| `surrender = early` | +0.24% player |
+$$a^* = \arg\max_{a \in \mathcal{A}(H)} \text{EV}_a(H, \mathcal{C})$$
 
-Pre-built canonical rule sets: `STRIP_S17`, `DOWNTOWN_H17`, `LIBERAL`,
-`TOURIST_TRAP`.
+$$\text{EV}^* = \text{EV}_{a^*}(H, \mathcal{C})$$
+
+The **delta** for each suboptimal action $a \neq a^*$ is:
+
+$$\Delta_a = \text{EV}_a - \text{EV}^* \leq 0$$
+
+This delta is what is shown in the UI's EV table — it tells you how much EV
+you lose by choosing that action instead of the optimal one.
+
+**Code:** `best_action(ev_dict)` → `(action_name, ev)`
+
+---
+
+### 10. Card Counting — Hi-Lo True Count
+
+The **running count** $\text{RC}$ is updated on every observed card $r$:
+
+$$\Delta \text{RC}(r) = \begin{cases}
++1 & r \in \{2, 3, 4, 5, 6\} \quad \text{(low cards help dealer)} \\
+\phantom{+}0 & r \in \{7, 8, 9\} \quad \text{(neutral)} \\
+-1 & r \in \{T, A\} \quad \text{(high cards help player)}
+\end{cases}$$
+
+The **true count** $\text{TC}$ normalises for decks remaining:
+
+$$\text{TC} = \frac{\text{RC}}{D_{\text{remaining}}} = \frac{\text{RC}}{\,M / 52\,}$$
+
+A true count of $+1$ corresponds to approximately $+0.5\%$ player EV relative
+to the neutral shoe.
+
+**Important:** the EV engine does **not** use $\text{TC}$ directly. It uses the
+**exact shoe composition** $\{n_r\}$, which strictly subsumes all count
+information. The true count is displayed in the UI as a human-readable summary
+only.
+
+**Code:** `Shoe.true_count` → `running_count / (total_remaining / 52)`
+
+---
+
+### 11. Mid-Shoe Join — Maximum-Entropy Prior
+
+When joining a live game in progress, an unknown number of cards $k$ have
+been dealt before arrival. Let $\mathcal{S}_0$ be the full fresh shoe
+($52N$ cards) and $\mathcal{O}$ be the set of cards directly observed since
+joining. The model maintains:
+
+$$\hat{\mathcal{S}} = \mathcal{S}_0 \setminus \mathcal{O}$$
+
+Cards dealt before arrival are **not** removed — they remain as if still in
+the shoe. This is the **maximum-entropy prior**: in the absence of information
+about which ranks were dealt early, a uniform residual distribution is the
+least-biased estimate. Formally, for any rank $r$:
+
+$$\hat{P}(\text{next} = r) = \frac{n_r^{(0)} - n_r^{(\mathcal{O})}}{52N - |\mathcal{O}|}$$
+
+where $n_r^{(0)}$ is the full-shoe count and $n_r^{(\mathcal{O})}$ is the
+number of rank $r$ observed. As $|\mathcal{O}| \to 52N$, this converges to
+the true posterior.
+
+The **observation ratio** tracks information quality:
+
+$$\rho = \frac{|\mathcal{O}|}{52N} \in [0, 1]$$
+
+| $\rho$ | EV quality |
+|--------|-----------|
+| $< 0.10$ | Near basic strategy; count signal unreliable |
+| $0.10 - 0.25$ | Mild count signal; treat with caution |
+| $0.25 - 0.60$ | Count-adjusted EVs meaningful |
+| $> 0.60$ | High-confidence shoe-aware EVs |
+
+**Code:** `ShoeState.observation_ratio`, `ShoeState.is_uncertain`, `ShoeState.uncertainty_label`
+
+---
+
+## Rule Variants & EV Impact
+
+All rule variants are encoded in `RuleSet` and propagate through every calculation automatically:
+
+| Rule flag | Effect on house edge |
+|-----------|---------------------|
+| `dealer_hits_soft17` (H17 vs S17) | +0.22% to house |
+| `double_after_split` (DAS) | −0.14% to house |
+| `resplit_aces` (RSA) | −0.08% to house |
+| `max_splits` 1 → 4 | −0.05% per extra split allowed |
+| `blackjack_payout` 3:2 → 6:5 | +1.37% to house (large) |
+| `surrender = late` | −0.07% to house |
+| `surrender = early` | −0.24% to house |
+
+Pre-built canonical rule sets: `STRIP_S17`, `DOWNTOWN_H17`, `LIBERAL`, `TOURIST_TRAP`
 
 ---
 
@@ -387,15 +426,15 @@ Pre-built canonical rule sets: `STRIP_S17`, `DOWNTOWN_H17`, `LIBERAL`,
 
 ```
 blackjack/
-├── rules.py        RuleSet dataclass — single source of truth for all rule flags
-├── hand.py         Hand evaluation: hand_total, is_soft, is_blackjack, can_split
-├── shoe.py         Shoe: card counts, removal, running count, true count
-├── shoe_state.py   ShoeState: wraps Shoe with mid-shoe-join uncertainty tracking
-├── actions.py      LegalActions gater — pure function of (hand, splits_used, rules)
-├── ev.py           EV engine: dealer_distribution, action_evs, split_ev, best_action
-├── detector.py     CardDetector: TemplateDetector (OpenCV) + YOLODetector (YOLO)
-├── capture.py      CaptureSession: screen grab → detect → ingest → callback loop
-└── ui_state.py     AppState: session state + EV/history adapters for Streamlit
+├── rules.py        RuleSet — single source of truth for all rule flags
+├── hand.py         hand_total, is_soft, is_blackjack, can_split
+├── shoe.py         Shoe — counts, remove, running_count, true_count
+├── shoe_state.py   ShoeState — mid-shoe join, confidence thresholds, observation_ratio
+├── actions.py      get_legal_actions — pure gate function
+├── ev.py           dealer_distribution, action_evs, split_ev, best_action
+├── detector.py     TemplateDetector (OpenCV) + YOLODetector (YOLO)
+├── capture.py      CaptureSession — background grab → detect → ingest loop
+└── ui_state.py     AppState, format_ev_table, health_status
 ```
 
 ---
@@ -404,20 +443,20 @@ blackjack/
 
 ```
 test_space_for_projects/
-├── blackjack/          Python package (see above)
+├── app.py              Streamlit 5-panel UI
+├── blackjack/          Python engine package
+├── tests/              pytest test suite (7 files)
 ├── configs/
-│   ├── app.yaml        FPS, monitor, confidence thresholds, simulation defaults
-│   └── vision.yaml     Screen region coordinates per seat + detector settings
+│   ├── app.yaml        FPS, monitor, confidence thresholds
+│   └── vision.yaml     Screen region coordinates per seat
 ├── data/
-│   ├── templates/      Card template images for TemplateDetector (PNG files)
-│   ├── models/         YOLO weights (cards.pt) for YOLODetector
-│   ├── raw_frames/     Saved screen grabs (optional, app.save_parquet)
-│   └── observations.csv  Event log of all accepted card detections
-├── tests/              pytest test suite
-├── notebooks/          Jupyter exploration notebooks
-├── experiments/        Scratch experiments
-├── reports/            Generated analysis reports
-└── pyproject.toml      Dependencies and tool configuration
+│   ├── templates/      Card PNG templates for TemplateDetector
+│   ├── models/         YOLO weights (cards.pt)
+│   └── observations.csv
+├── notebooks/
+├── experiments/
+├── reports/
+└── pyproject.toml
 ```
 
 ---
