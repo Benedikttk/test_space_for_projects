@@ -250,6 +250,96 @@ class YOLODetector(CardDetector):
         return detections
 
 
+class TrainedCardYOLO(CardDetector):
+    """Card detector backed by a model trained with :class:`CardYOLOTrainer`.
+
+    This is the production detector to use once you have trained your own
+    YOLO weights with the synthetic dataset.
+
+    Parameters
+    ----------
+    model_path:
+        Path to ``best.pt`` produced by :meth:`CardYOLOTrainer.train`.
+    confidence_threshold:
+        Minimum confidence score to accept a detection (default 0.75).
+    device:
+        Inference device: ``'cpu'``, ``'cuda'``, ``'0'``, or ``'mps'``.
+    """
+
+    def __init__(
+        self,
+        model_path: str | Path = "data/models/card_detector/weights/best.pt",
+        confidence_threshold: float = 0.75,
+        device: str = "cpu",
+    ) -> None:
+        self.model_path           = Path(model_path)
+        self.confidence_threshold = confidence_threshold
+        self.device               = device
+        self._model               = None
+        self._load_model()
+
+    def _load_model(self) -> None:
+        try:
+            from ultralytics import YOLO  # type: ignore
+            self._model = YOLO(str(self.model_path))
+            self._model.to(self.device)
+            log.info(
+                "TrainedCardYOLO loaded from %s on %s",
+                self.model_path,
+                self.device,
+            )
+        except Exception as exc:
+            log.warning("Could not load TrainedCardYOLO model: %s", exc)
+            self._model = None
+
+    def is_available(self) -> bool:
+        return self._model is not None
+
+    def detect(self, image: np.ndarray, source: str = "") -> List[DetectionResult]:
+        """Detect cards in *image* using the trained YOLO model.
+
+        Parameters
+        ----------
+        image:
+            BGR numpy array (OpenCV convention).
+        source:
+            Region label passed through to :class:`DetectionResult`.
+
+        Returns
+        -------
+        List of :class:`DetectionResult`, one per detected card.
+        """
+        if self._model is None or image is None or image.size == 0:
+            return []
+        try:
+            results = self._model.predict(
+                image,
+                conf    = self.confidence_threshold,
+                verbose = False,
+                device  = self.device,
+            )
+        except Exception as exc:
+            log.warning("TrainedCardYOLO inference failed: %s", exc)
+            return []
+
+        detections: List[DetectionResult] = []
+        for r in results:
+            for box in r.boxes:
+                cls_id = int(box.cls[0])
+                conf   = float(box.conf[0])
+                label  = r.names[cls_id]          # e.g. 'A_S' or 'T_H'
+                parts  = label.split("_", 1)
+                rank   = parts[0] if parts else label
+                suit   = parts[1] if len(parts) > 1 else ""
+                x1, y1, x2, y2 = box.xyxy[0].tolist()
+                bbox = (int(x1), int(y1), int(x2 - x1), int(y2 - y1))
+                detections.append(DetectionResult(
+                    rank=rank, suit=suit, confidence=conf,
+                    bbox=bbox, source=source,
+                ))
+        return detections
+
+
 def build_detector(
     backend: str = "template",
     template_dir: str | Path = "data/templates",
@@ -260,9 +350,21 @@ def build_detector(
 
     If *backend* == 'yolo' but the model file or ultralytics are absent,
     falls back to TemplateDetector automatically.
+
+    If *backend* == 'trained_yolo', uses :class:`TrainedCardYOLO` (the model
+    trained by :class:`~blackjack.card_yolo_trainer.CardYOLOTrainer`).  Falls
+    back to the template detector if weights are missing.
     """
     backend = (backend or "template").lower()
-    if backend in {"yolo", "auto"}:
+    if backend == "trained_yolo":
+        d = TrainedCardYOLO(
+            model_path=model_path,
+            confidence_threshold=confidence_threshold,
+        )
+        if d.is_available():
+            return d
+        log.warning("TrainedCardYOLO unavailable, falling back to template matching.")
+    elif backend in {"yolo", "auto"}:
         d = YOLODetector(
             model_path=model_path,
             confidence_threshold=confidence_threshold,
