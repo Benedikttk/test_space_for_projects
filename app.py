@@ -11,6 +11,7 @@ import yaml
 from blackjack.capture import CaptureConfig, CaptureSession
 from blackjack.shoe_state import ShoeState
 from blackjack.ui_state import AppState, format_ev_table, health_status
+from blackjack.ml_stats import MLStatsTracker, HandRecord
 
 RANKS = ["2", "3", "4", "5", "6", "7", "8", "9", "T", "J", "Q", "K", "A"]
 OUTCOMES = ["win", "loss", "push", "surrender"]
@@ -115,6 +116,9 @@ def _ensure_state() -> None:
         session = CaptureSession(st.session_state.capture_config, st.session_state.shoe_state)
         session.on_cards_observed = _on_cards_observed
         st.session_state.capture_session = session
+
+    if "ml_stats" not in st.session_state:
+        st.session_state.ml_stats = MLStatsTracker()
 
 
 def main() -> None:
@@ -312,6 +316,123 @@ def main() -> None:
         app_state.hand_history.clear()
         app_state.hand_counter = 0
         st.rerun()
+
+    # ------------------------------------------------------------------
+    # Cut Card Panel
+    # ------------------------------------------------------------------
+    st.divider()
+    st.subheader("✂️ Cut Card & Penetration")
+
+    pen_state = capture.penetration_state
+    if pen_state is not None:
+        col_pen1, col_pen2, col_pen3 = st.columns(3)
+        with col_pen1:
+            st.metric("Penetration", f"{pen_state.penetration_pct:.1f} %")
+        with col_pen2:
+            st.metric("Cards until reshuffle", pen_state.cards_until_reshuffle)
+        with col_pen3:
+            st.metric("Cards dealt", pen_state.cards_dealt)
+
+        progress = min(1.0, pen_state.cards_dealt / max(1, pen_state.cut_card_position))
+        st.progress(progress, text=f"Penetration {pen_state.penetration_pct:.1f} %")
+
+        if pen_state.is_reshuffle_alert:
+            st.warning(
+                f"⚠️ Reshuffle approaching — only {pen_state.cards_until_reshuffle} cards "
+                "until cut card!"
+            )
+    else:
+        st.info(
+            "No cut card data yet. "
+            "Configure a `cut_card_region` in `CaptureConfig` to enable tracking."
+        )
+
+    # ------------------------------------------------------------------
+    # Stats Dashboard
+    # ------------------------------------------------------------------
+    st.divider()
+    st.subheader("📊 Statistics Dashboard")
+
+    ml_stats: MLStatsTracker = st.session_state.ml_stats
+    rolling = ml_stats.rolling_stats(last_n=500)
+    shoe_stats = ml_stats.current_shoe_stats
+
+    stat_cols = st.columns(4)
+    with stat_cols[0]:
+        st.metric("Hands tracked", rolling["hands"])
+    with stat_cols[1]:
+        st.metric("Win rate (last 500)", f"{rolling['win_rate']:.1%}")
+    with stat_cols[2]:
+        st.metric("EV / hand", f"{rolling['ev_per_hand']:+.4f}")
+    with stat_cols[3]:
+        st.metric("Action compliance", f"{rolling['action_compliance']:.1%}")
+
+    shoe_cols = st.columns(4)
+    with shoe_cols[0]:
+        st.metric("This shoe – hands", shoe_stats.hands)
+    with shoe_cols[1]:
+        st.metric("This shoe – win rate", f"{shoe_stats.win_rate:.1%}")
+    with shoe_cols[2]:
+        st.metric("This shoe – EV/hand", f"{shoe_stats.ev_per_hand:+.4f}")
+    with shoe_cols[3]:
+        st.metric("This shoe – ROI", f"{shoe_stats.roi:.1%}")
+
+    # Log hand to ML stats when user logs a hand
+    with st.expander("Log hand to ML stats"):
+        ml_hand_type = st.selectbox(
+            "Hand type", options=["hard", "soft", "pair"], key="ml_hand_type"
+        )
+        ml_outcome = st.selectbox(
+            "Outcome", options=["win", "loss", "push"], key="ml_outcome"
+        )
+        ml_bet = st.number_input("Bet size", min_value=0.0, value=5.0, key="ml_bet")
+        ml_net = st.number_input("Net result", value=0.0, key="ml_net")
+        if st.button("Record to ML stats", use_container_width=True):
+            if len(app_state.player_cards) >= 2 and app_state.dealer_upcard:
+                _, best_ev, _ = app_state.get_recommendation()
+                rec_action = app_state.get_recommendation()[0]
+                from blackjack.hand import hand_total, _normalise
+                num_aces = sum(1 for c in app_state.player_cards if _normalise(c) == "A")
+                num_tens = sum(1 for c in app_state.player_cards if _normalise(c) == "T")
+                try:
+                    du = {"A": 11, "T": 10}.get(
+                        _normalise(app_state.dealer_upcard),
+                        int(app_state.dealer_upcard),
+                    )
+                except (ValueError, TypeError):
+                    du = 0
+                rec = HandRecord(
+                    true_count=float(shoe_state.true_count),
+                    penetration=float(1.0 - shoe_state.remaining / max(1, shoe_state.decks * 52)),
+                    decks_remaining=float(shoe_state.remaining / 52),
+                    hand_type=ml_hand_type,
+                    player_value=int(hand_total(app_state.player_cards)[0]),
+                    dealer_upcard=du,
+                    num_aces=num_aces,
+                    num_tens=num_tens,
+                    recommended=rec_action,
+                    actual=rec_action,
+                    outcome=ml_outcome,
+                    ev=float(best_ev),
+                    bet_size=float(ml_bet),
+                    net_result=float(ml_net),
+                )
+                ml_stats.record(rec)
+                st.success("Recorded.")
+            else:
+                st.warning("Enter player cards and dealer upcard first.")
+
+    # Train ML model button
+    if st.button("Train ML model"):
+        result = ml_stats.train_model(min_samples=50)
+        if result is None:
+            st.warning("Not enough data to train (need at least 50 hands with win/loss outcomes).")
+        else:
+            st.success(
+                f"Model trained on {result['n_samples']} hands. "
+                f"CV accuracy: {result['accuracy']:.1%} ± {result['accuracy_std']:.1%}"
+            )
+            st.json(result["feature_importance"])
 
 
 if __name__ == "__main__":
