@@ -50,6 +50,26 @@ class LegalActions:
     def __repr__(self) -> str:
         return f"LegalActions({sorted(self.as_set())})"
 
+    def as_list(self) -> list[str]:
+        ordered = ["hit", "stand", "double", "split", "surrender"]
+        return [a for a in ordered if a in self.as_set()]
+
+    def __iter__(self):
+        return iter(self.as_list())
+
+    def __len__(self) -> int:
+        return len(self.as_list())
+
+    def __getitem__(self, idx: int) -> str:
+        return self.as_list()[idx]
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, (list, tuple)):
+            return list(other) == self.as_list()
+        if isinstance(other, (set, frozenset)):
+            return set(other) == self.as_set()
+        return super().__eq__(other)
+
 
 def get_legal_actions(
     hand: Hand,

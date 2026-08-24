@@ -61,3 +61,13 @@ def test_side_bet_summary_insurance_not_none_for_ace():
     summary = side_bet_summary(shoe, 'T', '5', 'A')
     assert summary['insurance'] is not None
     assert isinstance(summary['insurance'], float)
+
+
+def test_perfect_pairs_accepts_player_cards_only():
+    ev = perfect_pairs_ev(["T", "T"])
+    assert isinstance(ev, float)
+
+
+def test_twenty_one_plus_three_accepts_player_cards_plus_upcard():
+    ev = twenty_one_plus_three_ev(["4", "5"], "6")
+    assert isinstance(ev, float)

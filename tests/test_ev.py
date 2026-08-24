@@ -111,6 +111,21 @@ def test_basic_strategy_ev_cached_returns_same_as_uncached():
         assert bs_evs[action] == pytest.approx(direct_evs[action], abs=1e-10)
 
 
+def test_action_evs_accepts_player_cards_sequence():
+    evs = action_evs(["T", "6"], "7", Shoe(decks=8), RuleSet())
+    assert "stand" in evs
+
+
+def test_basic_strategy_ev_scalar_compat_mode_returns_float():
+    ev = basic_strategy_ev(
+        player_total=16,
+        dealer_upcard="T",
+        is_soft=False,
+        is_blackjack=False,
+    )
+    assert isinstance(ev, float)
+
+
 # ---------------------------------------------------------------------------
 # dampened_ev
 # ---------------------------------------------------------------------------

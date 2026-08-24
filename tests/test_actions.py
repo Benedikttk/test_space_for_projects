@@ -51,3 +51,9 @@ def test_three_plus_cards_no_double_or_split():
     actions = get_legal_actions(Hand(["5", "3", "2"]), RuleSet())
     assert actions.double is False
     assert actions.split is False
+
+
+def test_legal_actions_is_list_compatible():
+    actions = get_legal_actions(Hand(["8", "3"]), RuleSet())
+    assert "hit" in actions
+    assert isinstance(list(actions), list)
