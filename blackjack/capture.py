@@ -122,7 +122,8 @@ class CaptureSession:
             confidence_threshold=config.review_threshold,
         )
         self.on_cards_observed: Optional[Callable[[List[DetectionResult]], None]] = None
-        self._running = False
+        self._running = threading.Event()
+        self._state_lock = threading.Lock()
         self._thread: Optional[threading.Thread] = None
         self._hand_number = 0
 
@@ -132,21 +133,25 @@ class CaptureSession:
 
     def start(self) -> None:
         """Start the capture loop in a background thread."""
-        if self._running:
-            return
-        self._running = True
-        self._thread = threading.Thread(
-            target=self._loop, name="capture", daemon=True
-        )
-        self._thread.start()
+        with self._state_lock:
+            if self._running.is_set():
+                return
+            self._running.set()
+            self._thread = threading.Thread(
+                target=self._loop, name="capture", daemon=True
+            )
+            self._thread.start()
         log.info("Capture session started (%.1f FPS, monitor %d)",
                  self.config.fps, self.config.monitor_index)
 
     def stop(self) -> None:
         """Signal the capture loop to stop."""
-        self._running = False
-        if self._thread:
-            self._thread.join(timeout=3.0)
+        with self._state_lock:
+            self._running.clear()
+            thread = self._thread
+            self._thread = None
+        if thread:
+            thread.join(timeout=3.0)
         log.info("Capture session stopped.")
 
     def next_hand(self) -> None:
@@ -165,7 +170,7 @@ class CaptureSession:
                 "mss is not installed. "
                 "Run: pip install mss  or  pip install -e .[dev]"
             )
-            self._running = False
+            self._running.clear()
             return
 
         interval = 1.0 / max(self.config.fps, 0.1)
@@ -174,7 +179,7 @@ class CaptureSession:
             monitor = monitors[self.config.monitor_index] \
                 if self.config.monitor_index < len(monitors) else monitors[1]
 
-            while self._running:
+            while self._running.is_set():
                 t0 = time.monotonic()
                 frame_results: List[DetectionResult] = []
 
@@ -184,7 +189,11 @@ class CaptureSession:
                     crop = self._grab_region(sct, monitor, region)
                     if crop is None:
                         continue
-                    detections = self.detector.detect(crop, source=source)
+                    try:
+                        detections = self.detector.detect(crop, source=source)
+                    except Exception as exc:
+                        log.warning("Detector failed for %s region: %s", source, exc)
+                        continue
                     for det in detections:
                         status = self.shoe_state.ingest(
                             det, hand_number=self._hand_number
