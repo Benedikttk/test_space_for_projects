@@ -12,6 +12,7 @@ from blackjack.capture import CaptureConfig, CaptureSession
 from blackjack.shoe_state import ShoeState
 from blackjack.ui_state import AppState, format_ev_table, health_status
 from blackjack.ml_stats import MLStatsTracker, HandRecord
+from blackjack.card_counter import CardCounterUI
 
 RANKS = ["2", "3", "4", "5", "6", "7", "8", "9", "T", "J", "Q", "K", "A"]
 OUTCOMES = ["win", "loss", "push", "surrender"]
@@ -119,6 +120,9 @@ def _ensure_state() -> None:
 
     if "ml_stats" not in st.session_state:
         st.session_state.ml_stats = MLStatsTracker()
+
+    if "card_counter" not in st.session_state:
+        st.session_state.card_counter = CardCounterUI()
 
 
 def main() -> None:
@@ -346,6 +350,63 @@ def main() -> None:
             "No cut card data yet. "
             "Configure a `cut_card_region` in `CaptureConfig` to enable tracking."
         )
+
+    # ------------------------------------------------------------------
+    # Live Card Detection Feed
+    # ------------------------------------------------------------------
+    st.divider()
+    st.subheader("🎥 Live Card Detection Feed")
+
+    counter: CardCounterUI = st.session_state.card_counter
+
+    # Running statistics
+    live_cols = st.columns(4)
+    with live_cols[0]:
+        st.metric("Cards Observed", sum(counter.observed_cards.values()))
+    with live_cols[1]:
+        st.metric("Running Count", counter.running_count)
+    with live_cols[2]:
+        st.metric("True Count", f"{counter.true_count:+.2f}")
+    with live_cols[3]:
+        st.metric("Penetration", f"{counter.observation_ratio:.1%}")
+
+    # Update card counter whenever new detections arrive
+    def _on_cards_detected_for_viz(results) -> None:
+        for det in results:
+            st.session_state.card_counter.add_card(det.rank)
+        _on_cards_observed(results)
+
+    capture.on_cards_observed = _on_cards_detected_for_viz
+
+    # Reset counter button
+    if st.button("Reset Card Counter", use_container_width=False):
+        st.session_state.card_counter.reset()
+        st.rerun()
+
+    # Live annotated video frame
+    annotated_frame = capture.latest_annotated_frame
+    if annotated_frame is not None:
+        st.image(
+            annotated_frame,
+            channels="BGR",
+            caption="Live detection — green boxes = detected cards",
+            use_container_width=True,
+        )
+    else:
+        placeholder = np.zeros((180, 320, 3), dtype=np.uint8)
+        st.image(
+            placeholder,
+            caption="No live frame yet — start capture to see detections.",
+            use_container_width=False,
+        )
+
+    # Card inventory table
+    st.write("**Card Inventory (observed so far)**")
+    table_data = counter.get_table_display()
+    if table_data:
+        st.dataframe(pd.DataFrame(table_data), use_container_width=True, hide_index=True)
+    else:
+        st.info("No cards detected yet. Start capture to begin.")
 
     # ------------------------------------------------------------------
     # Stats Dashboard
