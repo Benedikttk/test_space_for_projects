@@ -1,6 +1,6 @@
 import pytest
 
-from blackjack.hand import Hand, hand_total
+from blackjack.hand import Hand, can_split, hand_total, is_blackjack, is_soft
 
 
 def test_hand_total_hard_and_soft_and_multi_ace_reduction():
@@ -30,3 +30,10 @@ def test_is_bust_variants():
 def test_is_soft_vs_hard_after_hit():
     assert Hand(["A", "6"]).is_soft is True
     assert Hand(["A", "6", "9"]).is_soft is False
+
+
+def test_functional_hand_helpers_match_hand_properties():
+    cards = ["A", "T"]
+    assert is_soft(cards) is True
+    assert is_blackjack(cards) is True
+    assert can_split(["Q", "K"]) is True
