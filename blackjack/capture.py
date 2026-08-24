@@ -36,6 +36,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 import numpy as np
 
 from blackjack.detector import CardDetector, DetectionResult, build_detector
+from blackjack.detector_viz import VisualizingDetector
 from blackjack.shoe_state import ShoeState
 from blackjack.cut_card import (
     CutCardDetector,
@@ -137,6 +138,13 @@ class CaptureSession:
         self._thread: Optional[threading.Thread] = None
         self._hand_number = 0
 
+        # Visualization wrapper
+        self._viz_detector = VisualizingDetector(self.detector)
+
+        # Latest frames (thread-safe via _state_lock)
+        self._latest_frame: Optional[np.ndarray] = None
+        self._latest_annotated_frame: Optional[np.ndarray] = None
+
         # Cut card and penetration tracking
         self._cut_card_detector = CutCardDetector(
             total_cards=config.total_cards,
@@ -192,6 +200,18 @@ class CaptureSession:
         with self._state_lock:
             return self._last_penetration
 
+    @property
+    def latest_frame(self) -> Optional[np.ndarray]:
+        """Latest raw captured frame (thread-safe read)."""
+        with self._state_lock:
+            return self._latest_frame
+
+    @property
+    def latest_annotated_frame(self) -> Optional[np.ndarray]:
+        """Latest frame with green bounding boxes drawn (thread-safe read)."""
+        with self._state_lock:
+            return self._latest_annotated_frame
+
     # ------------------------------------------------------------------
     # Internal capture loop
     # ------------------------------------------------------------------
@@ -224,10 +244,14 @@ class CaptureSession:
                     if crop is None:
                         continue
                     try:
-                        detections = self.detector.detect(crop, source=source)
+                        detections, annotated = self._viz_detector.detect_and_draw(crop, source=source)
                     except Exception as exc:
                         log.warning("Detector failed for %s region: %s", source, exc)
                         continue
+                    # Store latest frames (use last region processed)
+                    with self._state_lock:
+                        self._latest_frame = crop
+                        self._latest_annotated_frame = annotated
                     for det in detections:
                         status = self.shoe_state.ingest(
                             det, hand_number=self._hand_number
