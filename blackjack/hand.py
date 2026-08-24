@@ -44,6 +44,24 @@ def hand_total(ranks: Sequence[str]) -> Tuple[int, bool]:
     return total, soft
 
 
+def is_soft(ranks: Sequence[str]) -> bool:
+    """Return True when at least one ace is counted as 11."""
+    return hand_total(ranks)[1]
+
+
+def is_blackjack(ranks: Sequence[str]) -> bool:
+    """Return True for a two-card natural blackjack."""
+    total, _ = hand_total(ranks)
+    return len(ranks) == 2 and total == 21
+
+
+def can_split(ranks: Sequence[str]) -> bool:
+    """Return True when a two-card hand may be split."""
+    if len(ranks) != 2:
+        return False
+    return RANK_VALUE[_normalise(ranks[0])] == RANK_VALUE[_normalise(ranks[1])]
+
+
 @dataclass
 class Hand:
     """Mutable hand during a round."""
@@ -74,14 +92,12 @@ class Hand:
     @property
     def is_blackjack(self) -> bool:
         """True only for a natural (exactly 2 cards totalling 21)."""
-        return len(self.cards) == 2 and self.total == 21
+        return is_blackjack(self.cards)
 
     @property
     def can_split(self) -> bool:
         """True when both cards have equal value (pair)."""
-        if len(self.cards) != 2:
-            return False
-        return RANK_VALUE[_normalise(self.cards[0])] == RANK_VALUE[_normalise(self.cards[1])]
+        return can_split(self.cards)
 
     @property
     def split_rank(self) -> str | None:
