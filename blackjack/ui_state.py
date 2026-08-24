@@ -22,7 +22,7 @@ from blackjack.side_bets import side_bet_summary
 
 
 @dataclass
-class HandRecord:
+class HandHistoryEntry:
     """Log entry for one completed hand."""
     hand_number: int
     player_cards: List[str]
@@ -58,7 +58,7 @@ class AppState:
     last_detection_warning: str = ""
 
     # History
-    hand_history: List[HandRecord] = field(default_factory=list)
+    hand_history: List[HandHistoryEntry] = field(default_factory=list)
     hand_counter: int = 0
 
     # ------------------------------------------------------------------
@@ -191,7 +191,7 @@ class AppState:
             return
         action, ev, _ = self.get_recommendation()
         self.hand_counter += 1
-        self.hand_history.append(HandRecord(
+        self.hand_history.append(HandHistoryEntry(
             hand_number=self.hand_counter,
             player_cards=list(self.player_cards),
             dealer_upcard=self.dealer_upcard,
@@ -305,8 +305,12 @@ def format_ev_table(ev_dict: Dict[str, float]) -> List[Dict[str, str]]:
 def health_status(confidence: float) -> Tuple[str, str]:
     """Return (label, colour) for a detection confidence value."""
     if confidence >= 0.85:
-        return "Good", "green"
+        return "Good", "#16a34a"
     elif confidence >= 0.75:
-        return "Review", "orange"
+        return "Review", "#f59e0b"
     else:
-        return "Low – verify manually", "red"
+        return "Low – verify manually", "#dc2626"
+
+
+# Backwards-compatible alias for older imports/tests.
+HandRecord = HandHistoryEntry

@@ -1,4 +1,4 @@
-from blackjack.ui_state import AppState, format_ev_table, health_status
+from blackjack.ui_state import AppState, HandHistoryEntry, format_ev_table, health_status
 
 
 def test_compute_evs_empty_when_player_has_fewer_than_two_cards():
@@ -42,6 +42,14 @@ def test_format_ev_table_sorts_best_first_and_marks_best_delta():
 
 
 def test_health_status_confidence_bands():
-    assert health_status(0.90) == ("Good", "green")
-    assert health_status(0.80) == ("Review", "orange")
-    assert health_status(0.70) == ("Low – verify manually", "red")
+    assert health_status(0.90) == ("Good", "#16a34a")
+    assert health_status(0.80) == ("Review", "#f59e0b")
+    assert health_status(0.70) == ("Low – verify manually", "#dc2626")
+
+
+def test_log_hand_uses_hand_history_entry_dataclass():
+    state = AppState()
+    state.set_player_cards(["A", "T"])
+    state.set_dealer_upcard("6")
+    state.log_hand(action_taken="stand", outcome="win")
+    assert isinstance(state.hand_history[0], HandHistoryEntry)

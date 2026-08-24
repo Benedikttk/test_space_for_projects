@@ -84,6 +84,16 @@ class CardDetector(abc.ABC):
         """Return True if the detector backend is usable."""
 
 
+class NullDetector(CardDetector):
+    """No-op detector used when no backend is available."""
+
+    def detect(self, image: np.ndarray, source: str = "") -> List[DetectionResult]:
+        return []
+
+    def is_available(self) -> bool:
+        return False
+
+
 class TemplateDetector(CardDetector):
     """OpenCV template-matching card detector.
 
@@ -251,7 +261,8 @@ def build_detector(
     If *backend* == 'yolo' but the model file or ultralytics are absent,
     falls back to TemplateDetector automatically.
     """
-    if backend == "yolo":
+    backend = (backend or "template").lower()
+    if backend in {"yolo", "auto"}:
         d = YOLODetector(
             model_path=model_path,
             confidence_threshold=confidence_threshold,
@@ -259,7 +270,26 @@ def build_detector(
         if d.is_available():
             return d
         log.warning("YOLO detector unavailable, falling back to template matching.")
-    return TemplateDetector(
+    template_detector = TemplateDetector(
         template_dir=template_dir,
+        confidence_threshold=confidence_threshold,
+    )
+    if template_detector.is_available():
+        return template_detector
+    log.warning("No available detection backend; using NullDetector.")
+    return NullDetector()
+
+
+def get_detector(
+    backend: str = "template",
+    template_dir: str | Path = "data/templates",
+    model_path: str | Path = "data/models/cards.pt",
+    confidence_threshold: float = 0.75,
+) -> CardDetector:
+    """Compatibility alias for detector factory."""
+    return build_detector(
+        backend=backend,
+        template_dir=template_dir,
+        model_path=model_path,
         confidence_threshold=confidence_threshold,
     )
