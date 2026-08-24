@@ -295,7 +295,7 @@ def _hit_ev_cached(
 # ---------------------------------------------------------------------------
 
 def action_evs(
-    hand: Hand,
+    player_cards: Hand | Sequence[str],
     dealer_upcard: str,
     shoe: Shoe,
     rules: RuleSet,
@@ -309,6 +309,10 @@ def action_evs(
 
     EV values are in units of the original (pre-split) bet.
     """
+    hand = player_cards
+    if not isinstance(hand, Hand):
+        hand = Hand(cards=[_normalise(c) for c in hand])
+
     legal = get_legal_actions(hand, rules, splits_used, is_post_split_ace,
                               dealer_upcard)
 
@@ -497,7 +501,8 @@ def dampened_ev(
     raw_ev: float,
     basic_strategy_ev_val: float,
     observation_ratio: float,
-    min_ratio: float = 0.15,
+    min_penetration: float = 0.15,
+    min_ratio: float | None = None,
 ) -> float:
     """Dampen EV-based deviations from basic strategy toward basic strategy
     when shoe observation ratio is low.
@@ -506,11 +511,12 @@ def dampened_ev(
     When observation_ratio >= 1.0, return raw_ev (no dampening).
     In between, use a square-root interpolation.
     """
-    if observation_ratio < min_ratio:
+    threshold = min_penetration if min_ratio is None else min_ratio
+    if observation_ratio < threshold:
         return basic_strategy_ev_val
     if observation_ratio >= 1.0:
         return raw_ev
-    t = ((observation_ratio - min_ratio) / (1.0 - min_ratio)) ** 0.5
+    t = ((observation_ratio - threshold) / (1.0 - threshold)) ** 0.5
     return basic_strategy_ev_val + t * (raw_ev - basic_strategy_ev_val)
 
 
@@ -528,17 +534,56 @@ def _basic_strategy_ev_cached(
 
 
 def basic_strategy_ev(
-    hand: Hand,
-    dealer_upcard: str,
-    rules: RuleSet,
+    player_total_or_hand: Hand | int | None = None,
+    dealer_upcard: str | None = None,
+    rules: RuleSet | None = None,
     decks: int = 8,
-) -> dict:
+    is_soft: bool = False,
+    is_blackjack: bool = False,
+    player_total: int | None = None,
+) -> dict | float:
     """Compute action EVs using a fresh full-shoe (basic strategy baseline).
 
     Creates a new Shoe(decks=decks) and calls action_evs.
     Used as the baseline for penetration dampening.
     """
-    result = _basic_strategy_ev_cached(
-        tuple(hand.cards), _normalise(dealer_upcard), rules, decks
-    )
-    return dict(result)
+    if rules is None:
+        rules = RuleSet()
+    if dealer_upcard is None:
+        raise ValueError("dealer_upcard is required")
+
+    hand = player_total_or_hand
+    if player_total is not None:
+        hand = player_total
+
+    if isinstance(hand, Hand):
+        result = _basic_strategy_ev_cached(
+            tuple(hand.cards), _normalise(dealer_upcard), rules, decks
+        )
+        return dict(result)
+
+    if hand is None:
+        raise ValueError("player_total_or_hand/player_total must be provided")
+
+    player_total = hand
+    if is_blackjack:
+        baseline_hand = Hand(cards=["A", "T"])
+    elif is_soft:
+        if player_total <= 12:
+            baseline_hand = Hand(cards=["A", "A"])
+        else:
+            second_val = max(2, min(9, player_total - 11))
+            baseline_hand = Hand(cards=["A", str(second_val)])
+    else:
+        if player_total <= 11:
+            first = max(2, min(9, player_total - 2))
+            second = max(2, player_total - first)
+            baseline_hand = Hand(cards=[str(first), str(second)])
+        else:
+            second_val = player_total - 10
+            rank = "T" if second_val >= 10 else str(max(2, second_val))
+            baseline_hand = Hand(cards=["T", rank])
+
+    evs = action_evs(baseline_hand, dealer_upcard, Shoe(decks=decks), rules)
+    play_evs = {k: v for k, v in evs.items() if k != "insurance"}
+    return max(play_evs.values()) if play_evs else 0.0

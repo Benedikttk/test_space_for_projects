@@ -46,3 +46,17 @@ def test_kelly_summary_negative_ev():
     summary = kelly_summary(ev=-0.005, bankroll=1000.0)
     assert summary["is_positive_ev"] is False
     assert summary["kelly_fraction"] == 0.0
+
+
+def test_kelly_fraction_half_keyword_matches_half_kelly_formula():
+    assert kelly_fraction(0.02, variance=1.0, half=True) == pytest.approx(0.01)
+
+
+def test_recommended_bet_accepts_kelly_fraction_keyword():
+    result = recommended_bet(ev=0.02, bankroll=1000.0, kelly_fraction=0.01)
+    assert result == pytest.approx(10.0)
+
+
+def test_kelly_summary_text_mode():
+    summary = kelly_summary(ev=0.02, kelly_fraction=0.01)
+    assert isinstance(summary, str)

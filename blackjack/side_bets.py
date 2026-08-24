@@ -40,9 +40,9 @@ _BLACK_COUNT = 2  # clubs + spades
 
 
 def perfect_pairs_ev(
-    shoe: Shoe,
-    card1: str,
-    card2: str,
+    shoe_or_player_cards,
+    card1: str | None = None,
+    card2: str | None = None,
     payout_mixed: float = 5.0,
     payout_coloured: float = 10.0,
     payout_perfect: float = 30.0,
@@ -55,6 +55,17 @@ def perfect_pairs_ev(
 
     Returns net EV per unit staked (N:1 payout convention).
     """
+    if isinstance(shoe_or_player_cards, Shoe):
+        shoe = shoe_or_player_cards
+        if card1 is None or card2 is None:
+            raise ValueError("card1 and card2 are required when passing a Shoe")
+    else:
+        cards = list(shoe_or_player_cards)
+        if len(cards) != 2:
+            raise ValueError("player_cards must contain exactly two cards")
+        shoe = Shoe(decks=8)
+        card1, card2 = cards[0], cards[1]
+
     r1 = _normalise(card1)
     r2 = _normalise(card2)
 
@@ -102,10 +113,10 @@ def _is_straight(ranks: list) -> bool:
 
 
 def twenty_one_plus_three_ev(
-    shoe: Shoe,
-    card1: str,
-    card2: str,
-    dealer_upcard: str,
+    shoe_or_player_cards,
+    card1_or_dealer_upcard: str,
+    card2: str | None = None,
+    dealer_upcard: str | None = None,
     payout_flush: float = 5.0,
     payout_straight: float = 10.0,
     payout_three_of_a_kind: float = 30.0,
@@ -123,6 +134,20 @@ def twenty_one_plus_three_ev(
 
     Returns net EV per unit staked (N:1 payout convention).
     """
+    if isinstance(shoe_or_player_cards, Shoe):
+        _ = shoe_or_player_cards  # shoe kept for backward compatibility
+        if card2 is None or dealer_upcard is None:
+            raise ValueError(
+                "card2 and dealer_upcard are required when passing a Shoe"
+            )
+        card1 = card1_or_dealer_upcard
+    else:
+        cards = list(shoe_or_player_cards)
+        if len(cards) != 2:
+            raise ValueError("player_cards must contain exactly two cards")
+        card1, card2 = cards
+        dealer_upcard = card1_or_dealer_upcard
+
     r1 = _normalise(card1)
     r2 = _normalise(card2)
     ru = _normalise(dealer_upcard)
