@@ -133,32 +133,15 @@ Let $s$ be the sum with every ace counted as 11, and let $a$ be the number of
 aces:
 
 $$
-T(H)
-====
-
-s - 10k,
+T(H) = s - 10k,
 \qquad
-k =
-\min!\left(
-a,,
-\max!\left(
-0,,
-\left\lceil\frac{s-21}{10}\right\rceil
-\right)
-\right).
+k = \min\!\left(a,\, \max\!\left(0,\, \left\lceil\frac{s-21}{10}\right\rceil\right)\right).
 $$
 
 The hand is **soft** when at least one ace remains at 11 and $T(H) \leq 21$:
 
 $$
-\operatorname{soft}(H)
-======================
-
-\mathbf{1}!\left[
-a-k \geq 1
-;\wedge;
-T(H) \leq 21
-\right].
+\operatorname{soft}(H) = \mathbf{1}\!\left[a - k \geq 1 \;\wedge\; T(H) \leq 21\right].
 $$
 
 | Hand    | Total | Soft? |
@@ -184,20 +167,12 @@ player cards. The probability of each dealer final total is:
 
 $$
 P(D=d \mid u,\mathcal{S})
-=========================
-
-\sum_{\sigma \in \Sigma(u,d)}
+= \sum_{\sigma \in \Sigma(u,d)}
 \prod_{i=1}^{|\sigma|}
 \frac{
-n_{\sigma_i}
-!\left(
-\mathcal{S}^{-}\setminus\sigma_{1:i-1}
-\right)
+  n_{\sigma_i}\!\left(\mathcal{S}^{-}\setminus\sigma_{1:i-1}\right)
 }{
-M
-!\left(
-\mathcal{S}^{-}\setminus\sigma_{1:i-1}
-\right)
+  M\!\left(\mathcal{S}^{-}\setminus\sigma_{1:i-1}\right)
 }
 $$
 
@@ -212,23 +187,15 @@ and renormalising:
 
 $$
 P(D=d \mid u,\mathcal{S},\neg\mathrm{BJ})
-=========================================
-
-\frac{
-\displaystyle
-\sum_{h\neq f}
-\frac{n_h}{M}
-,
-P!\left(
-D=d
-\mid
-[u,h],
-\mathcal{S}^{-}\setminus{h}
-\right)
+= \frac{
+  \displaystyle
+  \sum_{h\neq f}
+  \frac{n_h}{M}
+  \, P\!\left(D=d \mid [u,h],\, \mathcal{S}^{-}\setminus\{h\}\right)
 }{
-\displaystyle
-\sum_{h\neq f}
-\frac{n_h}{M}
+  \displaystyle
+  \sum_{h\neq f}
+  \frac{n_h}{M}
 }.
 $$
 
@@ -236,7 +203,7 @@ The conditioning applies **only to the first draw** (the hole card). All
 subsequent draws use the full depleted shoe. Bust is encoded as $d=22$.
 
 $$
-\sum_{d\in{17,18,19,20,21,22}} P(D=d)=1
+\sum_{d\in\{17,18,19,20,21,22\}} P(D=d)=1
 $$
 
 **Code:** `dealer_distribution(upcard, shoe, rules, player_cards)` in `ev.py`
@@ -246,34 +213,19 @@ $$
 ### 4. Expected Value of Standing
 
 $$
-\operatorname{EV}_{\text{stand}}(P,D)
-=====================================
-
-\sum_d P(D=d),\omega(P,d)
+\operatorname{EV}_{\text{stand}}(P,D) = \sum_d P(D=d)\,\omega(P,d)
 $$
 
 $$
-\omega(P,d)
-===========
-
+\omega(P,d) =
 \begin{cases}
-+\lambda,
-& d=22
-\quad\text{(dealer bust)},\
-+\lambda,
-& P=\mathrm{BJ},; d\neq21,\
-+\lambda,
-& P=\mathrm{BJ},; d=21,;
-\text{natural beats dealer 21},\
-0,
-& P=\mathrm{BJ},; d=21,;
-\text{natural does not beat dealer 21},\
-+1,
-& P>d,\
--1,
-& P<d,\
-0,
-& P=d.
++\lambda, & d=22 \quad\text{(dealer bust)},\\
++\lambda, & P=\mathrm{BJ},\; d\neq21,\\
++\lambda, & P=\mathrm{BJ},\; d=21,\; \text{natural beats dealer 21},\\
+0,        & P=\mathrm{BJ},\; d=21,\; \text{natural does not beat dealer 21},\\
++1,       & P>d,\\
+-1,       & P<d,\\
+0,        & P=d.
 \end{cases}
 $$
 
@@ -290,24 +242,15 @@ Hitting is solved by **backward induction** over the probability tree:
 
 $$
 \operatorname{EV}_{\text{hit}}(H,\mathcal{C})
-=============================================
-
-\sum_{r:,n_r>0}
+= \sum_{r:\,n_r>0}
 \frac{n_r}{M(\mathcal{C})}
 \begin{cases}
--1,
-&
-T(H\cup{r})>21,
-[4pt]
+-1, & T(H\cup\{r\})>21, \\[4pt]
 \displaystyle
-\max!\Bigl(
-\operatorname{EV}*{\text{stand}}
-\bigl(T(H\cup{r})\bigr),
-\operatorname{EV}*{\text{hit}}
-\bigl(H\cup{r},\mathcal{C}\setminus{r}\bigr)
-\Bigr),
-&
-\text{otherwise}.
+\max\!\Bigl(
+  \operatorname{EV}_{\text{stand}}\bigl(T(H\cup\{r\})\bigr),\,
+  \operatorname{EV}_{\text{hit}}\bigl(H\cup\{r\},\mathcal{C}\setminus\{r\}\bigr)
+\Bigr), & \text{otherwise}.
 \end{cases}
 $$
 
@@ -326,20 +269,11 @@ $2\times$:
 
 $$
 \operatorname{EV}_{\text{double}}(H,\mathcal{C})
-================================================
-
-\sum_{r:,n_r>0}
+= \sum_{r:\,n_r>0}
 \frac{n_r}{M(\mathcal{C})}
 \begin{cases}
--2,
-&
-T(H\cup{r})>21,
-[4pt]
-2\cdot
-\operatorname{EV}_{\text{stand}}
-\bigl(T(H\cup{r})\bigr),
-&
-\text{otherwise}.
+-2, & T(H\cup\{r\})>21, \\[4pt]
+2\cdot\operatorname{EV}_{\text{stand}}\bigl(T(H\cup\{r\})\bigr), & \text{otherwise}.
 \end{cases}
 $$
 
@@ -355,28 +289,19 @@ locks all further actions to **stand only**.
 After splitting a pair of rank $r$, both copies leave the shoe:
 
 $$
-\mathcal{C}^{(r)}
-=================
-
-\mathcal{C}\setminus{r,r}
+\mathcal{C}^{(r)} = \mathcal{C}\setminus\{r,r\}
 $$
 
 Each child hand draws one second card $c$, producing hand $[r,c]$ with shoe
-$\mathcal{C}^{(r)}\setminus{c}$. The combined EV of both child hands is:
+$\mathcal{C}^{(r)}\setminus\{c\}$. The combined EV of both child hands is:
 
 $$
 \operatorname{EV}_{\text{split}}(r,\mathcal{C})
-===============================================
-
-2
-\sum_{c:,n_c^{(r)}>0}
+= 2
+\sum_{c:\,n_c^{(r)}>0}
 \frac{n_c^{(r)}}{M(\mathcal{C}^{(r)})}
 \max_{a\in\mathcal{A}([r,c])}
-\operatorname{EV}_a
-!\left(
-[r,c],
-\mathcal{C}^{(r)}\setminus{c}
-\right)
+\operatorname{EV}_a\!\left([r,c],\,\mathcal{C}^{(r)}\setminus\{c\}\right)
 $$
 
 The factor 2 reflects both hands playing for the same stake. The $\max$ recurses
@@ -387,7 +312,7 @@ industry approximation; error is negligible for multi-deck shoes).
 **Ace-split restriction:** when `split_aces_get_one_card = True`:
 
 $$
-\mathcal{A}([A,c])={\text{stand}}
+\mathcal{A}([A,c]) = \{\text{stand}\}
 $$
 
 **Code:** `split_ev(hand, dealer_upcard, shoe, rules, splits_used)` in `ev.py`
@@ -397,21 +322,19 @@ $$
 ### 8. Surrender
 
 $$
-\operatorname{EV}_{\text{surrender}}=-\frac{1}{2}
+\operatorname{EV}_{\text{surrender}} = -\frac{1}{2}
 $$
 
 Surrender is optimal when:
 
 $$
 -\frac{1}{2}
-
 >
-
-\max!\left(
-\operatorname{EV}*{\text{stand}},
-\operatorname{EV}*{\text{hit}},
-\operatorname{EV}*{\text{double}},
-\operatorname{EV}*{\text{split}}
+\max\!\left(
+  \operatorname{EV}_{\text{stand}},\,
+  \operatorname{EV}_{\text{hit}},\,
+  \operatorname{EV}_{\text{double}},\,
+  \operatorname{EV}_{\text{split}}
 \right)
 $$
 
@@ -429,14 +352,8 @@ The EV is computed from the **exact remaining shoe** after removing the upcard:
 
 $$
 \operatorname{EV}_{\text{insurance}}
-====================================
-
-2\cdot
-P(\text{hole}=T\mid\mathcal{S}\setminus{A})
--1
-==
-
-\frac{2n_T}{M-1}-1
+= 2\cdot P(\text{hole}=T\mid\mathcal{S}\setminus\{A\}) - 1
+= \frac{2n_T}{M-1}-1
 $$
 
 Insurance is $+\text{EV}$ when
@@ -454,23 +371,13 @@ $\operatorname{EV}\approx-0.077$ (house edge).
 ### 10. Optimal Action Selection
 
 $$
-a^{*}
-=====
-
-\arg\max_{a\in\mathcal{A}(H)}
-\operatorname{EV}_a(H,\mathcal{C})
+a^{*} = \arg\max_{a\in\mathcal{A}(H)} \operatorname{EV}_a(H,\mathcal{C})
 $$
 
 The **delta** for each suboptimal action $a\neq a^{*}$:
 
 $$
-\Delta_a
-========
-
-## \operatorname{EV}_a
-
-\operatorname{EV}^{*}
-\leq0
+\Delta_a = \operatorname{EV}_a - \operatorname{EV}^{*} \leq 0
 $$
 
 Insurance is excluded from this comparison — it is a separate side-bet decision.
@@ -482,28 +389,20 @@ Insurance is excluded from this comparison — it is a separate side-bet decisio
 ### 11. Card Counting — Hi-Lo True Count
 
 $$
-\Delta\mathrm{RC}(r)
-====================
-
+\Delta\mathrm{RC}(r) =
 \begin{cases}
-+1,
-& r\in{2,3,4,5,6},\
-0,
-& r\in{7,8,9},\
--1,
-& r\in{T,A}.
++1, & r\in\{2,3,4,5,6\},\\
+0,  & r\in\{7,8,9\},\\
+-1, & r\in\{T,A\}.
 \end{cases}
 $$
 
 $$
-\mathrm{TC}
-===========
-
-\frac{\mathrm{RC}}{M/52}
+\mathrm{TC} = \frac{\mathrm{RC}}{M/52}
 $$
 
-A true count of $+1\approx+0.5%$ player EV. The EV engine uses the **exact
-shoe composition** ${n_r}$, which strictly subsumes all count information.
+A true count of $+1\approx+0.5\%$ player EV. The EV engine uses the **exact
+shoe composition** $\{n_r\}$, which strictly subsumes all count information.
 The true count is displayed as a human-readable summary only.
 
 **Code:** `Shoe.true_count` in `shoe.py`
@@ -519,32 +418,17 @@ using a **square-root schedule** (more conservative than linear at low
 penetration):
 
 $$
-\operatorname{EV}_{\text{damp}}
-===============================
-
+\operatorname{EV}_{\text{damp}} =
 \begin{cases}
-\operatorname{EV}*{\text{basic}},
-&
-\rho<\rho*{\min},
-[6pt]
+\operatorname{EV}_{\text{basic}},
+& \rho<\rho_{\min}, \\[6pt]
 \displaystyle
-\operatorname{EV}*{\text{basic}}
-+
-\sqrt{
-\frac{\rho-\rho*{\min}}{1-\rho_{\min}}
-}
-\left(
-\operatorname{EV}_{\text{raw}}
-------------------------------
-
-\operatorname{EV}*{\text{basic}}
-\right),
-&
-\rho*{\min}\leq\rho<1,
-[6pt]
+\operatorname{EV}_{\text{basic}}
++ \sqrt{\frac{\rho-\rho_{\min}}{1-\rho_{\min}}}
+\left(\operatorname{EV}_{\text{raw}} - \operatorname{EV}_{\text{basic}}\right),
+& \rho_{\min}\leq\rho<1, \\[6pt]
 \operatorname{EV}_{\text{raw}},
-&
-\rho\geq1.
+& \rho\geq1.
 \end{cases}
 $$
 
@@ -569,10 +453,7 @@ Given the EV of the best action and the variance of blackjack outcomes
 to wager is:
 
 $$
-f^{*}
-=====
-
-\frac{\operatorname{EV}}{\sigma^2}
+f^{*} = \frac{\operatorname{EV}}{\sigma^2}
 $$
 
 The engine uses **half-Kelly** by default
@@ -580,14 +461,11 @@ The engine uses **half-Kelly** by default
 the long-run growth rate:
 
 $$
-f_{\text{half}}
-===============
-
-\frac{\operatorname{EV}}{2\sigma^2}
+f_{\text{half}} = \frac{\operatorname{EV}}{2\sigma^2}
 $$
 
 The recommended bet is clamped to
-$[\text{min_bet},,\text{max_bet}]$ and rounded to the nearest min-bet
+$[\text{min\_bet},\,\text{max\_bet}]$ and rounded to the nearest min-bet
 increment. When $\operatorname{EV}\leq0$, bet the table minimum.
 
 **Code:** `kelly_fraction`, `recommended_bet`, `kelly_summary` in `kelly.py`
@@ -600,21 +478,11 @@ Let $\mathcal{S}_0$ be the full fresh shoe and $\mathcal{O}$ the cards observed
 since joining:
 
 $$
-\hat{\mathcal{S}}
-=================
-
-\mathcal{S}_0\setminus\mathcal{O}
+\hat{\mathcal{S}} = \mathcal{S}_0\setminus\mathcal{O}
 $$
 
 $$
-\hat{P}(\text{next}=r)
-======================
-
-\frac{
-n_r^{(0)}-n_r^{(\mathcal{O})}
-}{
-52N-|\mathcal{O}|
-}
+\hat{P}(\text{next}=r) = \frac{n_r^{(0)}-n_r^{(\mathcal{O})}}{52N-|\mathcal{O}|}
 $$
 
 Cards dealt before arrival are **not** removed — they remain in the model. This
@@ -625,11 +493,7 @@ $|\mathcal{O}|\to52N$, the estimate converges to the true posterior.
 The observation ratio:
 
 $$
-\rho
-====
-
-\frac{|\mathcal{O}|}{52N}
-\in[0,1]
+\rho = \frac{|\mathcal{O}|}{52N} \in [0,1]
 $$
 
 **Code:** `ShoeState.observation_ratio` in `shoe_state.py`
