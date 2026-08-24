@@ -11,6 +11,17 @@ Blackjack variance is approximately 1.15 for standard rules
 
 The Kelly fraction is only positive (i.e. bet > 0) when EV > 0.
 When EV <= 0, Kelly says bet the table minimum.
+
+Penetration-aware Kelly
+-----------------------
+At low penetration the shoe composition is poorly known, so it is safer
+to shade bets toward the minimum.  The adjustment formula:
+
+    penetration_quality = sqrt(penetration) if penetration > 0.15 else 0
+    adjusted_kelly = base_kelly × (0.5 + 0.5 × penetration_quality)
+
+This gives 50 % of Kelly at zero penetration and ~90 % at 75 %
+penetration.
 """
 
 from __future__ import annotations
@@ -126,3 +137,101 @@ def kelly_summary(
         "edge_percent": ev * 100.0,
         "is_positive_ev": ev > 0,
     }
+
+
+# ---------------------------------------------------------------------------
+# Penetration-aware Kelly adjustment
+# ---------------------------------------------------------------------------
+
+def penetration_quality(penetration: float) -> float:
+    """Return a penetration quality factor in [0, 1].
+
+    Parameters
+    ----------
+    penetration:
+        Fraction of shoe dealt so far, in [0, 1].
+
+    Returns
+    -------
+    Quality factor: 0 for very low penetration (< 15 %), rising to ~1 at
+    full penetration via ``sqrt(penetration)``.
+    """
+    if penetration <= 0.15:
+        return 0.0
+    return math.sqrt(min(1.0, penetration))
+
+
+def penetration_adjusted_kelly(
+    ev: float,
+    penetration: float,
+    variance: float = 1.15,
+    half: bool = True,
+    fraction: float | None = None,
+) -> float:
+    """Return the Kelly fraction adjusted for shoe penetration.
+
+    At low penetration (< 15 %) bet 50 % of base Kelly (conservative).
+    At high penetration (75 %) bet ~90 % of base Kelly.
+
+    Parameters
+    ----------
+    ev:
+        Expected value of the best action.
+    penetration:
+        Fraction of the shoe that has been dealt, in [0, 1].
+    variance:
+        Outcome variance (default 1.15).
+    half:
+        Whether to use half-Kelly as the base. Default True.
+    fraction:
+        Custom Kelly multiplier (overrides ``half``).
+
+    Returns
+    -------
+    Adjusted Kelly fraction, clamped to [0, 1].
+    """
+    base = kelly_fraction(ev, variance=variance, half=half, fraction=fraction)
+    pq = penetration_quality(penetration)
+    adjusted = base * (0.5 + 0.5 * pq)
+    return max(0.0, min(1.0, adjusted))
+
+
+def penetration_adjusted_bet(
+    ev: float,
+    penetration: float,
+    bankroll: float,
+    min_bet: float = 5.0,
+    max_bet: float = 500.0,
+    variance: float = 1.15,
+    half: bool = True,
+    fraction: float | None = None,
+) -> float:
+    """Return bet size adjusted for penetration quality.
+
+    Parameters
+    ----------
+    ev:
+        Expected value of the best action.
+    penetration:
+        Fraction of the shoe dealt, in [0, 1].
+    bankroll:
+        Current bankroll in currency units.
+    min_bet, max_bet:
+        Bet size clamps.
+    variance, half, fraction:
+        Passed to ``penetration_adjusted_kelly``.
+
+    Returns
+    -------
+    Recommended bet size in currency units, rounded to nearest min_bet
+    increment and clamped to [min_bet, max_bet].
+    """
+    if ev <= 0:
+        return min_bet
+    f = penetration_adjusted_kelly(
+        ev, penetration, variance=variance, half=half, fraction=fraction
+    )
+    raw = f * bankroll
+    if min_bet > 0:
+        raw = round(raw / min_bet) * min_bet
+    return max(min_bet, min(max_bet, raw))

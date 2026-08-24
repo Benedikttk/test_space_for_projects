@@ -37,6 +37,12 @@ import numpy as np
 
 from blackjack.detector import CardDetector, DetectionResult, build_detector
 from blackjack.shoe_state import ShoeState
+from blackjack.cut_card import (
+    CutCardDetector,
+    CutCardDetection,
+    PenetrationTracker,
+    PenetrationState,
+)
 
 log = logging.getLogger(__name__)
 
@@ -79,11 +85,14 @@ class CaptureConfig:
     dealer_region: Optional[Region] = None
     player_region: Optional[Region] = None
     other_player_regions: Dict[str, Region] = field(default_factory=dict)
+    cut_card_region: Optional[Region] = None
     backend: str = "template"
     template_dir: str = "data/templates"
     model_path: str = "data/models/cards.pt"
     accept_threshold: float = 0.85
     review_threshold: float = 0.75
+    total_cards: int = 416  # 8 decks × 52
+    reshuffle_alert_threshold: int = 26
 
 
 class CaptureSession:
@@ -122,10 +131,22 @@ class CaptureSession:
             confidence_threshold=config.review_threshold,
         )
         self.on_cards_observed: Optional[Callable[[List[DetectionResult]], None]] = None
+        self.on_cut_card_detected: Optional[Callable[[CutCardDetection], None]] = None
         self._running = threading.Event()
         self._state_lock = threading.Lock()
         self._thread: Optional[threading.Thread] = None
         self._hand_number = 0
+
+        # Cut card and penetration tracking
+        self._cut_card_detector = CutCardDetector(
+            total_cards=config.total_cards,
+        )
+        self._penetration_tracker = PenetrationTracker(
+            total_cards=config.total_cards,
+            alert_threshold=config.reshuffle_alert_threshold,
+        )
+        self._cut_card_placed: bool = False
+        self._last_penetration: Optional[PenetrationState] = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -157,6 +178,19 @@ class CaptureSession:
     def next_hand(self) -> None:
         """Increment hand counter (call when a new hand begins)."""
         self._hand_number += 1
+
+    def reset_shoe(self) -> None:
+        """Reset state for a new shoe (call after shuffle)."""
+        self._cut_card_placed = False
+        self._cut_card_detector.reset_smoothing()
+        self._penetration_tracker.reset()
+        log.info("Shoe reset: cut card and penetration state cleared.")
+
+    @property
+    def penetration_state(self) -> Optional[PenetrationState]:
+        """Latest penetration state (thread-safe read)."""
+        with self._state_lock:
+            return self._last_penetration
 
     # ------------------------------------------------------------------
     # Internal capture loop
@@ -206,6 +240,39 @@ class CaptureSession:
                         self.on_cards_observed(frame_results)
                     except Exception as exc:
                         log.warning("on_cards_observed callback raised: %s", exc)
+
+                # --- cut card detection ---
+                if self.config.cut_card_region:
+                    cc_crop = self._grab_region(
+                        sct, monitor, self.config.cut_card_region
+                    )
+                    if cc_crop is not None:
+                        cc = self._cut_card_detector.detect(cc_crop)
+                        if cc.detected:
+                            if not self._cut_card_placed:
+                                self._penetration_tracker.set_cut_card_position(
+                                    cc.placement_cards
+                                )
+                                self._cut_card_placed = True
+                                log.info(
+                                    "Cut card placed at %d cards (%.1f %%)",
+                                    cc.placement_cards,
+                                    cc.position_fraction * 100,
+                                )
+                            with self._state_lock:
+                                cards_dealt = (
+                                    self.config.total_cards
+                                    - self.shoe_state.remaining
+                                )
+                                pen = self._penetration_tracker.update(cards_dealt)
+                                self._last_penetration = pen
+                            if self.on_cut_card_detected:
+                                try:
+                                    self.on_cut_card_detected(cc)
+                                except Exception as exc:
+                                    log.warning(
+                                        "on_cut_card_detected callback raised: %s", exc
+                                    )
 
                 # --- sleep remainder of interval ---
                 elapsed = time.monotonic() - t0
