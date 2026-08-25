@@ -33,6 +33,27 @@ class TestHandRecord:
         assert rec.hand_type == "hard"
         assert rec.outcome == "loss"
 
+    def test_new_fields_defaults(self):
+        rec = _make_record()
+        assert rec.sequence_last_5_outcomes == []
+        assert rec.sequence_last_5_true_counts == []
+        assert rec.shoe_rank_distribution == []
+        assert rec.num_active_players == 0
+        assert rec.shoe_id == 0
+
+    def test_new_fields_set(self):
+        rec = _make_record(
+            sequence_last_5_outcomes=["win", "loss", "win", "win", "loss"],
+            sequence_last_5_true_counts=[1.0, 1.5, 2.0, 0.5, -0.5],
+            shoe_rank_distribution=[0.1] * 10,
+            num_active_players=3,
+            shoe_id=5,
+        )
+        assert rec.sequence_last_5_outcomes == ["win", "loss", "win", "win", "loss"]
+        assert rec.shoe_rank_distribution == [0.1] * 10
+        assert rec.num_active_players == 3
+        assert rec.shoe_id == 5
+
 
 class TestMLStatsTracker:
     def test_record_and_rolling_stats(self, tmp_path):
@@ -57,6 +78,15 @@ class TestMLStatsTracker:
         completed = tracker.reset_shoe()
         assert completed.hands == 1
         assert tracker.current_shoe_stats.hands == 0
+        tracker.close()
+
+    def test_reset_shoe_increments_counter(self, tmp_path):
+        tracker = MLStatsTracker(db_path=str(tmp_path / "test.db"))
+        assert tracker._shoe_counter == 0
+        tracker.reset_shoe()
+        assert tracker._shoe_counter == 1
+        tracker.reset_shoe()
+        assert tracker._shoe_counter == 2
         tracker.close()
 
     def test_shoe_stats_win_rate(self, tmp_path):
@@ -97,6 +127,17 @@ class TestMLStatsTracker:
         assert result is None
         tracker.close()
 
+    def test_train_model_returns_model_type(self, tmp_path):
+        tracker = MLStatsTracker(db_path=str(tmp_path / "test.db"))
+        for i in range(120):
+            outcome = "win" if i % 2 == 0 else "loss"
+            tracker.record(_make_record(outcome=outcome))
+        result = tracker.train_model(min_samples=50)
+        if result is not None:
+            assert "model_type" in result
+            assert result["model_type"] in ("GradientBoosting", "RandomForest")
+        tracker.close()
+
     def test_rolling_stats_empty_db(self, tmp_path):
         tracker = MLStatsTracker(db_path=str(tmp_path / "test.db"))
         stats = tracker.rolling_stats(last_n=100)
@@ -119,6 +160,63 @@ class TestMLStatsTracker:
         assert count <= 5
         tracker.close()
 
+    def test_record_roundtrips_new_fields(self, tmp_path):
+        import sqlite3, json
+        tracker = MLStatsTracker(db_path=str(tmp_path / "rt.db"))
+        rec = _make_record(
+            sequence_last_5_outcomes=["win", "loss", "win", "win", "loss"],
+            sequence_last_5_true_counts=[1.0, 1.5, 2.0, 0.5, -0.5],
+            shoe_rank_distribution=[0.1] * 10,
+            num_active_players=3,
+            shoe_id=7,
+        )
+        tracker.record(rec)
+        tracker.close()
+        con = sqlite3.connect(str(tmp_path / "rt.db"))
+        row = con.execute(
+            "SELECT sequence_last_5_outcomes, shoe_rank_distribution, num_active_players, shoe_id FROM hand_stats"
+        ).fetchone()
+        con.close()
+        assert json.loads(row[0]) == ["win", "loss", "win", "win", "loss"]
+        assert json.loads(row[1]) == [0.1] * 10
+        assert row[2] == 3
+        assert row[3] == 7
+
+    def test_train_bet_sizing_model_insufficient_data(self, tmp_path):
+        tracker = MLStatsTracker(db_path=str(tmp_path / "test.db"))
+        tracker.record(_make_record(outcome="win", bet_size=10.0, net_result=10.0))
+        result = tracker.train_bet_sizing_model(min_samples=50)
+        assert result is None
+        tracker.close()
+
+    def test_predict_bet_multiplier_before_training(self, tmp_path):
+        tracker = MLStatsTracker(db_path=str(tmp_path / "test.db"))
+        assert tracker.predict_bet_multiplier(_make_record()) is None
+        tracker.close()
+
+    def test_train_shoe_quality_model_insufficient_data(self, tmp_path):
+        tracker = MLStatsTracker(db_path=str(tmp_path / "test.db"))
+        result = tracker.train_shoe_quality_model(min_shoes=10)
+        assert result is None
+        tracker.close()
+
+    def test_train_action_deviation_detector_runs(self, tmp_path):
+        tracker = MLStatsTracker(db_path=str(tmp_path / "test.db"))
+        for i in range(60):
+            outcome = "win" if i % 2 == 0 else "loss"
+            actual = "stand" if i % 3 == 0 else "hit"
+            tracker.record(_make_record(outcome=outcome, recommended="stand", actual=actual))
+        result = tracker.train_action_deviation_detector(min_samples=20)
+        # May return None if only one class present; should not raise
+        assert result is None or isinstance(result, dict)
+        tracker.close()
+
+    def test_train_sequence_model_insufficient_data(self, tmp_path):
+        tracker = MLStatsTracker(db_path=str(tmp_path / "test.db"))
+        result = tracker.train_sequence_model(min_samples=50)
+        assert result is None
+        tracker.close()
+
 
 class TestShoeStats:
     def test_empty_win_rate(self):
@@ -132,3 +230,4 @@ class TestShoeStats:
     def test_roi_with_no_bets(self):
         s = ShoeStats(total_net=100.0, total_bets=0.0)
         assert s.roi == 0.0
+

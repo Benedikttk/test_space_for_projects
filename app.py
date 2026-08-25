@@ -489,11 +489,102 @@ def main() -> None:
         if result is None:
             st.warning("Not enough data to train (need at least 50 hands with win/loss outcomes).")
         else:
+            model_type = result.get("model_type", "Unknown")
             st.success(
-                f"Model trained on {result['n_samples']} hands. "
+                f"Model ({model_type}) trained on {result['n_samples']} hands. "
                 f"CV accuracy: {result['accuracy']:.1%} ± {result['accuracy_std']:.1%}"
             )
             st.json(result["feature_importance"])
+
+    if st.button("Train Bet Sizing Model"):
+        result = ml_stats.train_bet_sizing_model(min_samples=20)
+        if result is None:
+            st.warning("Not enough data for bet sizing model (need at least 20 hands with bet_size > 0).")
+        else:
+            st.success(
+                f"Bet sizing model ({result['model_type']}) trained on {result['n_samples']} hands. "
+                f"RMSE: {result['rmse']:.4f}"
+            )
+
+    if st.button("Train Shoe Quality Model"):
+        result = ml_stats.train_shoe_quality_model(min_shoes=5)
+        if result is None:
+            st.warning("Not enough shoes with rank distribution data.")
+        else:
+            st.success(
+                f"Shoe quality model trained on {result['n_shoes']} shoes. "
+                f"AUC: {result['auc']:.4f}"
+            )
+
+    if st.button("Train Action Deviation Detector"):
+        result = ml_stats.train_action_deviation_detector(min_samples=20)
+        if result is None:
+            st.warning("Not enough data or insufficient label variety for deviation detector.")
+        else:
+            st.success(
+                f"Deviation detector trained on {result['n_samples']} hands. "
+                f"Accuracy: {result['accuracy']:.1%}"
+            )
+
+    if st.button("Train Sequence Model"):
+        result = ml_stats.train_sequence_model(min_samples=20)
+        if result is None:
+            st.warning("Not enough hands with 5-outcome sequences for sequence model.")
+        else:
+            st.success(
+                f"Sequence model trained on {result['n_samples']} hands. "
+                f"Accuracy: {result['accuracy']:.1%}"
+            )
+
+    # ---- Live predictions sub-section ----
+    st.subheader("Live Predictions")
+    app_state = st.session_state.get("app_state", None)
+    if app_state is not None:
+        try:
+            from blackjack.ml_stats import HandRecord as _HR
+            _live_rec = _HR(
+                true_count=float(getattr(app_state, "true_count", 0)),
+                penetration=float(getattr(app_state, "penetration", 0)),
+                decks_remaining=float(getattr(app_state, "decks_remaining", 6)),
+                hand_type=str(getattr(app_state, "hand_type", "hard")),
+                player_value=int(getattr(app_state, "player_value", 0)),
+                dealer_upcard=int(getattr(app_state, "dealer_upcard", 10)),
+                num_aces=int(getattr(app_state, "num_aces", 0)),
+                num_tens=int(getattr(app_state, "num_tens", 0)),
+                recommended=str(getattr(app_state, "recommended", "stand")),
+                actual=str(getattr(app_state, "actual", "stand")),
+                outcome="loss",
+                ev=0.0,
+                sequence_last_5_outcomes=list(getattr(app_state, "sequence_last_5_outcomes", [])),
+                sequence_last_5_true_counts=list(getattr(app_state, "sequence_last_5_true_counts", [])),
+                shoe_rank_distribution=list(getattr(app_state, "shoe_rank_distribution", [])),
+                num_active_players=int(getattr(app_state, "num_active_players", 1)),
+            )
+            win_prob = ml_stats.predict_outcome(_live_rec)
+            bet_mult = ml_stats.predict_bet_multiplier(_live_rec)
+            seq_prob = ml_stats.predict_win_with_sequence(_live_rec)
+            srd = list(getattr(app_state, "shoe_rank_distribution", []))
+            shoe_q = ml_stats.predict_shoe_quality(srd) if srd else None
+            dev_p = ml_stats.predict_action_deviation(_live_rec, _live_rec.actual)
+            preds: dict = {}
+            if win_prob:
+                preds["win_probability"] = win_prob
+            if bet_mult is not None:
+                preds["bet_multiplier"] = round(bet_mult, 3)
+            if seq_prob:
+                preds["sequence_win_prob"] = seq_prob
+            if shoe_q is not None:
+                preds["shoe_quality_p_positive"] = round(shoe_q, 3)
+            if dev_p is not None:
+                preds["action_deviation_prob"] = round(dev_p, 3)
+            if preds:
+                st.json(preds)
+            else:
+                st.info("Train models above to see live predictions.")
+        except Exception as _pred_exc:
+            st.info("Train models above to see live predictions.")
+    else:
+        st.info("No live hand state available. Play a hand to see predictions.")
 
 
 if __name__ == "__main__":
