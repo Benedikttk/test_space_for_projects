@@ -1,10 +1,15 @@
 table_layout:
-  dealer_region: [700, 120, 500, 220]
+  # Dealer cards - top right of game window (Dealers hånd area)
+  dealer_region: [1100, 215, 110, 80]
+
   player_regions:
-    seat_1: [380, 430, 300, 220]
-    seat_2: [700, 460, 300, 220]
-    seat_3: [1020, 430, 300, 220]
-  action_region: [1320, 700, 500, 220]
+    seat_1: [460, 600, 140, 85]   # Elison (far left)
+    seat_2: [600, 590, 140, 85]   # krga410234 (center-left)
+    seat_3: [720, 575, 140, 85]   # center seat
+    seat_4: [860, 590, 140, 85]   # 3048antonieta853 (center-right)
+    seat_5: [1000, 580, 140, 85]  # 2HastyGopher (far right)
+
+  action_region: [860, 640, 200, 80]
 
 detection:
   card_model: "template"
