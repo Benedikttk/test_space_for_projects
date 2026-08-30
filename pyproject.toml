@@ -44,6 +44,10 @@ perf = [
 [project.scripts]
 bj = "blackjack.cli:app"
 
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["blackjack*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
